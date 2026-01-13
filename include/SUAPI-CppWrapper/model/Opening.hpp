@@ -29,6 +29,8 @@
 #define Opening_h
 
 #include <stdio.h>
+#include <memory>
+#include <vector>
 
 #include <SketchUpAPI/model/opening.h>
 
