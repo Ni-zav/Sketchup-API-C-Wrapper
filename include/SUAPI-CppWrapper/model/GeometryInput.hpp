@@ -367,6 +367,10 @@ public:
 
 } /* namespace CW */
 
+// Forward declaration - implementation in GeometryInput.cpp
+// Required for std::unordered_map<SUGeometryInputRef, ...> - MSVC 2022 compatibility
+bool operator==(const SUGeometryInputRef& lhs, const SUGeometryInputRef& rhs);
+
 namespace std {
   template <> struct hash<SUGeometryInputRef>
   {
