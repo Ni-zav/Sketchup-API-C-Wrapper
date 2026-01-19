@@ -13,8 +13,8 @@
 // copies of the Software, and to permit persons to whom the Software is
 // furnished to do so, subject to the following conditions:
 
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
 
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -33,25 +33,26 @@
 #include <cassert>
 #include <stdexcept>
 
-#include "SUAPI-CppWrapper/String.hpp"
 #include "SUAPI-CppWrapper/Color.hpp"
+#include "SUAPI-CppWrapper/String.hpp"
 #include "SUAPI-CppWrapper/model/Texture.hpp"
+
 
 namespace CW {
 
 /**************************
-* Static private methods **
-***************************/
+ * Static private methods **
+ ***************************/
 
 SUMaterialRef Material::create_material() {
   SUMaterialRef material = SU_INVALID;
   SUResult res = SUMaterialCreate(&material);
-  assert(res == SU_ERROR_NONE); _unused(res);
+  assert(res == SU_ERROR_NONE);
+  _unused(res);
   return material;
 }
 
-
-SUMaterialRef Material::copy_reference(const Material& other) {
+SUMaterialRef Material::copy_reference(const Material &other) {
   if (!other) {
     return SU_INVALID;
   }
@@ -62,22 +63,20 @@ SUMaterialRef Material::copy_reference(const Material& other) {
 }
 
 /*****************************
-* Constructors / Destructor **
-****************************/
-Material::Material():
-  Entity()
-{}
+ * Constructors / Destructor **
+ ****************************/
+Material::Material() : Entity() {}
 
+Material::Material(SUMaterialRef material_ref, bool attached)
+    : Entity(SUMaterialToEntity(material_ref), attached) {}
 
-Material::Material(SUMaterialRef material_ref, bool attached):
-  Entity(SUMaterialToEntity(material_ref), attached)
-{}
-
-
-Material::Material(const Material& other):
-  //Material(copy_reference(other), false)
-  //Entity(SUMaterialToEntity(copy_reference(other)))
-  Entity(other, SUMaterialToEntity(copy_reference(other))) // Because Material class owns the entity, we call the Entity constructor, not the copy constructor.
+Material::Material(const Material &other)
+    : // Material(copy_reference(other), false)
+      // Entity(SUMaterialToEntity(copy_reference(other)))
+      Entity(other,
+             SUMaterialToEntity(copy_reference(
+                 other))) // Because Material class owns the entity, we call the
+                          // Entity constructor, not the copy constructor.
 {
   // Copy across properties of the other material
   if (!other.m_attached && SUIsValid(m_entity)) {
@@ -90,17 +89,18 @@ Material::Material(const Material& other):
   }
 }
 
-
-Material& Material::operator=(const Material& other) {
+Material &Material::operator=(const Material &other) {
   if (!m_attached && SUIsValid(m_entity)) {
     SUMaterialRef material = this->ref();
     SUResult res = SUMaterialRelease(&material);
-    assert(res == SU_ERROR_NONE); _unused(res);
+    assert(res == SU_ERROR_NONE);
+    _unused(res);
   }
   m_entity = SUMaterialToEntity(copy_reference(other));
 
   if (!other.m_attached && SUIsValid(other.m_entity)) {
-    // The other material has not been attached to the model, so copy its properties to a new object
+    // The other material has not been attached to the model, so copy its
+    // properties to a new object
     this->name(other.name());
     this->type(other.type());
     this->opacity(other.opacity());
@@ -112,24 +112,18 @@ Material& Material::operator=(const Material& other) {
   return *this;
 }
 
-
 Material::~Material() {
   if (!m_attached && SUIsValid(m_entity)) {
     SUMaterialRef material = this->ref();
     SUResult res = SUMaterialRelease(&material);
-    assert(res == SU_ERROR_NONE); _unused(res);
+    assert(res == SU_ERROR_NONE);
+    _unused(res);
   }
 }
 
+SUMaterialRef Material::ref() const { return SUMaterialFromEntity(m_entity); }
 
-SUMaterialRef Material::ref() const {
-  return SUMaterialFromEntity(m_entity);
-}
-
-
-Material::operator SUMaterialRef() const {
-  return this->ref();
-}
+Material::operator SUMaterialRef() const { return this->ref(); }
 
 bool Material::operator!() const {
   return Entity::operator!();
@@ -140,7 +134,7 @@ bool Material::operator!() const {
 }
 
 Material Material::copy() const {
-  if(!(*this)) {
+  if (!(*this)) {
     throw std::logic_error("CW::Material::copy(): Material is null");
   }
   Material new_material(create_material(), false);
@@ -148,35 +142,35 @@ Material Material::copy() const {
   new_material.type(this->type());
   new_material.opacity(this->opacity());
   new_material.color(this->color());
-  Texture temp_texture = this->texture().copy(); // TODO: there is a problem with texture scaling here - API issue
+  Texture temp_texture =
+      this->texture().copy(); // TODO: there is a problem with texture scaling
+                              // here - API issue
   new_material.texture(temp_texture);
   new_material.copy_attributes_from((*this));
   return new_material;
 }
-
 
 Color Material::color() const {
   if (!(*this)) {
     return Color();
   }
   SUColor new_color;
-  SUResult res =  SUMaterialGetColor(this->ref(), &new_color);
+  SUResult res = SUMaterialGetColor(this->ref(), &new_color);
   if (res == SU_ERROR_NONE) {
     return Color(new_color);
   }
   return Color();
 }
 
-
-void Material::color(const Color& color) {
-  if(!(*this)) {
+void Material::color(const Color &color) {
+  if (!(*this)) {
     throw std::logic_error("CW::Material::color(): Material is null");
   }
   SUColor set_color = color.ref();
   SUResult res = SUMaterialSetColor(this->ref(), &set_color);
-  assert(res != SU_ERROR_INVALID_INPUT); _unused(res);
+  assert(res != SU_ERROR_INVALID_INPUT);
+  _unused(res);
 }
-
 
 String Material::name() const {
   if (!(*this)) {
@@ -189,13 +183,10 @@ String Material::name() const {
   assert(res != SU_ERROR_INVALID_OUTPUT);
   if (res == SU_ERROR_NONE) {
     return String(name_ref);
-  }
-  else {
+  } else {
     return String();
   }
 }
-
-
 
 String Material::display_name() const {
   if (!(*this)) {
@@ -208,24 +199,23 @@ String Material::display_name() const {
   assert(res != SU_ERROR_INVALID_OUTPUT);
   if (res == SU_ERROR_NONE) {
     return String(name_ref);
-  }
-  else {
+  } else {
     return String();
   }
 }
 
-void Material::name(const String& string) {
-  if(!(*this)) {
+void Material::name(const String &string) {
+  if (!(*this)) {
     throw std::logic_error("CW::Material::name(): Material is null");
   }
   SUResult res = SUMaterialSetName(this->ref(), string.std_string().c_str());
-  assert(res == SU_ERROR_NONE); _unused(res);
+  assert(res == SU_ERROR_NONE);
+  _unused(res);
   return;
 }
 
-
 double Material::opacity() const {
-  if(!(*this)) {
+  if (!(*this)) {
     throw std::logic_error("CW::Material::opacity(): Material is null");
   }
   double alpha;
@@ -236,25 +226,23 @@ double Material::opacity() const {
   return 1.0;
 }
 
-
 void Material::opacity(const double alpha) {
-  if(!(*this)) {
+  if (!(*this)) {
     throw std::logic_error("CW::Material::opacity(): Material is null");
   }
   double input_alpha = 1.0;
   if (alpha > 1.0) {
     input_alpha = 1.0;
-  }
-  else if (alpha < 0.0) {
+  } else if (alpha < 0.0) {
     input_alpha = 0.0;
   }
   SUResult res = SUMaterialSetOpacity(this->ref(), input_alpha);
-  assert(res != SU_ERROR_OUT_OF_RANGE); _unused(res);
+  assert(res != SU_ERROR_OUT_OF_RANGE);
+  _unused(res);
 }
 
-
 Texture Material::texture() const {
-  if(!(*this)) {
+  if (!(*this)) {
     return Texture(); // return a NULL texture if Material is NULL
   }
   SUTextureRef get_texture = SU_INVALID;
@@ -262,12 +250,12 @@ Texture Material::texture() const {
   if (res != SU_ERROR_NONE) {
     return Texture();
   }
-  return Texture(get_texture, true); // Texture is always attached to the material
+  return Texture(get_texture,
+                 true); // Texture is always attached to the material
 }
 
-
-void Material::texture(Texture& texture) {
-  if(!(*this)) {
+void Material::texture(Texture &texture) {
+  if (!(*this)) {
     throw std::logic_error("CW::Material::texture(): Material is null");
   }
   if (!texture) {
@@ -281,50 +269,107 @@ void Material::texture(Texture& texture) {
   SUTextureRef texture_ref = texture.ref();
   SUResult res = SUMaterialSetTexture(this->ref(), texture_ref);
   texture.attached(true); // Texture is now attached to the material
-  assert(res == SU_ERROR_NONE); _unused(res);
+  assert(res == SU_ERROR_NONE);
+  _unused(res);
 }
 
-
 SUMaterialType Material::type() const {
-  if(!(*this)) {
+  if (!(*this)) {
     throw std::logic_error("CW::Material::type(): Material is null");
   }
   SUMaterialType mat_type;
   SUResult res = SUMaterialGetType(this->ref(), &mat_type);
-  assert(res == SU_ERROR_NONE); _unused(res);
+  assert(res == SU_ERROR_NONE);
+  _unused(res);
   return mat_type;
 }
 
-
-void Material::type(const SUMaterialType& material_type) {
-  if(!(*this)) {
+void Material::type(const SUMaterialType &material_type) {
+  if (!(*this)) {
     throw std::logic_error("CW::Material::type(): Material is null");
   }
   SUResult res = SUMaterialSetType(this->ref(), material_type);
-  assert(res == SU_ERROR_NONE); _unused(res);
+  assert(res == SU_ERROR_NONE);
+  _unused(res);
 }
 
+#if (SketchUpAPI_VERSION_MAJOR >= 2025)
+double Material::metallic_factor() const {
+  if (!(*this))
+    return 0.0;
+  double factor = 0.0;
+  SUMaterialGetMetallicFactor(this->ref(), &factor);
+  return factor;
+}
+
+Texture Material::metallic_texture() const {
+  if (!(*this))
+    return Texture();
+  SUTextureRef texture = SU_INVALID;
+  if (SUMaterialGetMetallicTexture(this->ref(), &texture) == SU_ERROR_NONE) {
+    return Texture(texture, true);
+  }
+  return Texture();
+}
+
+double Material::roughness_factor() const {
+  if (!(*this))
+    return 0.5; // Default roughly matte
+  double factor = 0.5;
+  SUMaterialGetRoughnessFactor(this->ref(), &factor);
+  return factor;
+}
+
+Texture Material::roughness_texture() const {
+  if (!(*this))
+    return Texture();
+  SUTextureRef texture = SU_INVALID;
+  if (SUMaterialGetRoughnessTexture(this->ref(), &texture) == SU_ERROR_NONE) {
+    return Texture(texture, true);
+  }
+  return Texture();
+}
+
+Texture Material::normal_texture() const {
+  if (!(*this))
+    return Texture();
+  SUTextureRef texture = SU_INVALID;
+  if (SUMaterialGetNormalTexture(this->ref(), &texture) == SU_ERROR_NONE) {
+    return Texture(texture, true);
+  }
+  return Texture();
+}
+
+Texture Material::ao_texture() const {
+  if (!(*this))
+    return Texture();
+  SUTextureRef texture = SU_INVALID;
+  if (SUMaterialGetAOTexture(this->ref(), &texture) == SU_ERROR_NONE) {
+    return Texture(texture, true);
+  }
+  return Texture();
+}
+#endif
 
 bool Material::use_alpha() const {
-  if(!(*this)) {
+  if (!(*this)) {
     throw std::logic_error("CW::Material::use_alpha(): Material is null");
   }
   bool flag;
   SUResult res = SUMaterialGetUseOpacity(this->ref(), &flag);
-  assert(res == SU_ERROR_NONE); _unused(res);
+  assert(res == SU_ERROR_NONE);
+  _unused(res);
   return flag;
 }
 
-
 void Material::use_alpha(bool flag) {
-  if(!(*this)) {
+  if (!(*this)) {
     throw std::logic_error("CW::Material::use_alpha(): Material is null");
   }
   assert(!!(*this));
   SUResult res = SUMaterialSetUseOpacity(this->ref(), flag);
-  assert(res == SU_ERROR_NONE); _unused(res);
+  assert(res == SU_ERROR_NONE);
+  _unused(res);
 }
-
-
 
 } /* namespace CW */

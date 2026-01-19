@@ -152,6 +152,38 @@ class Material :public Entity {
   */
   void use_alpha(bool flag);
 
+  #if (SketchUpAPI_VERSION_MAJOR >= 2025)
+  /**
+  * Returns the metallic factor of the material.
+  */
+  double metallic_factor() const;
+
+  /**
+  * Returns the metallic texture of the material.
+  */
+  Texture metallic_texture() const;
+
+  /**
+  * Returns the roughness factor of the material.
+  */
+  double roughness_factor() const;
+
+  /**
+  * Returns the roughness texture of the material.
+  */
+  Texture roughness_texture() const;
+
+  /**
+  * Returns the normal texture of the material.
+  */
+  Texture normal_texture() const;
+
+  /**
+  * Returns the ambient occlusion texture of the material.
+  */
+  Texture ao_texture() const;
+  #endif
+
   /**
   * Hash function for use with unordered_map
   */
