@@ -23,6 +23,7 @@ struct ReducedMesh {
   std::vector<SUVector3D> normals;
   std::vector<SUPoint2D> uvs;
   std::vector<int32_t> indices;
+  std::vector<int32_t> face_sizes;
 
   // Spatial hashing for vertex welding
   // Key: (px, py, pz, nx, ny, nz, u, v) quantized
@@ -57,12 +58,18 @@ struct ReducedMesh {
   static constexpr double UV_SCALE = 10000.0;
 };
 
+struct CleanupOptions {
+  bool limited_dissolve = false;
+  bool tris_to_quads = false;
+  double angle_limit_radians = 0.0872665; // ~5 degrees
+};
+
 class HierarchyReducer {
 public:
   HierarchyReducer(Model &model);
 
   // Traverses the entire model and flattens geometry
-  void traverse();
+  void traverse(const CleanupOptions &options = CleanupOptions());
 
   // Returns the buckets
   // Key: Material Name (or "Default")
@@ -87,6 +94,9 @@ private:
 
   // Helper to load texture scales
   void cache_texture_scales();
+
+  // Mesh cleanup logic
+  void apply_mesh_cleanup(ReducedMesh &mesh, const CleanupOptions &options);
 };
 
 } /* namespace CW */
