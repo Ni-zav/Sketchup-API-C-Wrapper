@@ -88,7 +88,7 @@ private:
 
   void process_entities(const Entities &entities,
                         const Transformation &transform,
-                        Material inherited_material);
+                        Material inherited_material, int depth);
   void process_face(Face &face, const Transformation &transform,
                     Material inherited_material);
 

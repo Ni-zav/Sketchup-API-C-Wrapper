@@ -33,7 +33,7 @@ void HierarchyReducer::traverse(const CleanupOptions &options) {
          options.angle_limit_radians);
 
   cache_texture_scales();
-  process_entities(m_model.entities(), Transformation(), Material());
+  process_entities(m_model.entities(), Transformation(), Material(), 0);
 
   printf("C++: model Traversal complete. Materials found: %zu\n",
          m_buckets.size());
@@ -54,7 +54,7 @@ void HierarchyReducer::traverse(const CleanupOptions &options) {
 void HierarchyReducer::traverse_entities(const Entities &entities,
                                          const CleanupOptions &options) {
   cache_texture_scales();
-  process_entities(entities, Transformation(), Material());
+  process_entities(entities, Transformation(), Material(), 0);
 
   if (options.limited_dissolve || options.tris_to_quads) {
     for (auto &it : m_buckets) {
@@ -78,14 +78,22 @@ void HierarchyReducer::cache_texture_scales() {
 
 void HierarchyReducer::process_entities(const Entities &entities,
                                         const Transformation &transform,
-                                        Material inherited_material) {
+                                        Material inherited_material,
+                                        int depth) {
+  if (depth > 100) {
+    printf(
+        "C++: Warning: Max recursion depth (100) reached. Aborting branch.\n");
+    return;
+  }
+
   std::vector<ComponentInstance> instances = entities.instances();
   for (const auto &inst : instances) {
     Transformation child_transform = inst.transformation();
     Transformation new_transform = transform * child_transform;
     Material mat = inst.material();
     Material active_mat = mat.is_valid() ? mat : inherited_material;
-    process_entities(inst.definition().entities(), new_transform, active_mat);
+    process_entities(inst.definition().entities(), new_transform, active_mat,
+                     depth + 1);
   }
 
   std::vector<Group> groups = entities.groups();
@@ -94,7 +102,7 @@ void HierarchyReducer::process_entities(const Entities &entities,
     Transformation new_transform = transform * child_transform;
     Material mat = grp.material();
     Material active_mat = mat.is_valid() ? mat : inherited_material;
-    process_entities(grp.entities(), new_transform, active_mat);
+    process_entities(grp.entities(), new_transform, active_mat, depth + 1);
   }
 
   std::vector<Face> faces = entities.faces();
