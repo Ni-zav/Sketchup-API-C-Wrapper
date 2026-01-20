@@ -7,13 +7,13 @@
 #include <unordered_map>
 #include <vector>
 
-
 #include "SUAPI-CppWrapper/Transformation.hpp"
 #include "SUAPI-CppWrapper/model/Entities.hpp"
 #include "SUAPI-CppWrapper/model/Face.hpp"
+#include "SUAPI-CppWrapper/model/Material.hpp"
 #include "SUAPI-CppWrapper/model/Model.hpp"
+#include "SUAPI-CppWrapper/model/Texture.hpp"
 #include <SketchUpAPI/geometry.h>
-
 
 namespace CW {
 
@@ -60,13 +60,21 @@ private:
   Model &m_model;
   std::map<std::string, ReducedMesh> m_buckets;
 
+  // Cache for texture scales to apply UV scaling during flattening
+  std::map<std::string, std::pair<double, double>> m_texture_scale_cache;
+
   void process_entities(const Entities &entities,
-                        const Transformation &transform);
-  void process_face(Face &face, const Transformation &transform);
+                        const Transformation &transform,
+                        Material inherited_material);
+  void process_face(Face &face, const Transformation &transform,
+                    Material inherited_material);
 
   // Helper to add vertex with welding
   void add_vertex(ReducedMesh &mesh, const SUPoint3D &pos,
                   const SUVector3D &norm, const SUPoint2D &uv);
+
+  // Helper to load texture scales
+  void cache_texture_scales();
 };
 
 } /* namespace CW */
