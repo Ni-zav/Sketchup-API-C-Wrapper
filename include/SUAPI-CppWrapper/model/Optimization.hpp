@@ -25,24 +25,36 @@ struct ReducedMesh {
   std::vector<int32_t> indices;
 
   // Spatial hashing for vertex welding
-  // Key: (x_quantized, y_quantized, z_quantized) -> index
-  using VertexKey = std::tuple<int64_t, int64_t, int64_t>;
+  // Key: (px, py, pz, nx, ny, nz, u, v) quantized
+  using VertexKey = std::tuple<int64_t, int64_t, int64_t, int32_t, int32_t,
+                               int32_t, int64_t, int64_t>;
 
   struct KeyHasher {
     std::size_t operator()(const VertexKey &k) const {
-      auto h1 = std::hash<int64_t>{}(std::get<0>(k));
-      auto h2 = std::hash<int64_t>{}(std::get<1>(k));
-      auto h3 = std::hash<int64_t>{}(std::get<2>(k));
-      return h1 ^ (h2 << 1) ^ (h3 << 2);
+      size_t seed = 0;
+      auto combine = [&](auto val) {
+        seed ^= std::hash<decltype(val)>{}(val) + 0x9e3779b9 + (seed << 6) +
+                (seed >> 2);
+      };
+      combine(std::get<0>(k));
+      combine(std::get<1>(k));
+      combine(std::get<2>(k));
+      combine(std::get<3>(k));
+      combine(std::get<4>(k));
+      combine(std::get<5>(k));
+      combine(std::get<6>(k));
+      combine(std::get<7>(k));
+      return seed;
     }
   };
 
   std::unordered_map<VertexKey, int32_t, KeyHasher> unique_map;
 
-  // Tolerance for welding (internal units are inches, but efficient hash uses
-  // integer quantization) 0.0001 meters approx 0.0039 inches.
+  // Tolerance for welding (internal units are inches)
   static constexpr double WELD_TOLERANCE_INCH = 0.004;
-  static constexpr double SCALE_FACTOR = 1.0 / WELD_TOLERANCE_INCH;
+  static constexpr double POS_SCALE = 1.0 / WELD_TOLERANCE_INCH;
+  static constexpr double NORMAL_SCALE = 1000.0;
+  static constexpr double UV_SCALE = 10000.0;
 };
 
 class HierarchyReducer {

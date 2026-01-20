@@ -74,22 +74,28 @@ void HierarchyReducer::process_entities(const Entities &entities,
 void HierarchyReducer::process_face(Face &face, const Transformation &transform,
                                     Material inherited_material) {
   // 1. Determine Material Bucket
-  Material mat = face.material();
-  Material active_mat = mat.is_valid() ? mat : inherited_material;
+  Material front_mat = face.material();
+  Material back_mat = face.back_material();
+
+  bool has_front = front_mat.is_valid();
+  bool has_back = back_mat.is_valid();
+
+  // Prefer front material, then back, then inherited
+  Material active_mat =
+      has_front ? front_mat : (has_back ? back_mat : inherited_material);
 
   std::string mat_name = "SketchUp_Default";
   if (active_mat.is_valid()) {
     mat_name = active_mat.name().std_string();
   }
 
-  // Determine if we need UV scaling
+  // Determine if we need UV scaling (only if it's NOT a direct material on the
+  // face)
+  bool is_direct = has_front || has_back;
   double s_scale = 1.0;
   double t_scale = 1.0;
 
-  // STQ coordinates from SUMeshHelper are already normalized (0.0 to 1.0)
-  // if the material is applied directly to the face.
-  // They are in inches (raw units) if the material is inherited from a parent.
-  if (!mat.is_valid() && active_mat.is_valid()) {
+  if (!is_direct && active_mat.is_valid()) {
     auto it_scale = m_texture_scale_cache.find(mat_name);
     if (it_scale != m_texture_scale_cache.end()) {
       s_scale = it_scale->second.first;
@@ -104,7 +110,6 @@ void HierarchyReducer::process_face(Face &face, const Transformation &transform,
   ReducedMesh &mesh_buffer = m_buckets[mat_name];
 
   // 2. Tessellate Face
-  // Use SUMeshHelper to get triangulated data with STQ
   SUMeshHelperRef mesh_ref = SU_INVALID;
   SUMeshHelperCreate(&mesh_ref, face.ref());
 
@@ -129,7 +134,14 @@ void HierarchyReducer::process_face(Face &face, const Transformation &transform,
   SUMeshHelperGetVertices(mesh_ref, num_vertices, verts.data(), &v_count);
 
   size_t stq_count = 0;
-  SUMeshHelperGetFrontSTQCoords(mesh_ref, num_vertices, stq.data(), &stq_count);
+  // If we're using back material exclusively, we should use back UVs
+  if (has_back && !has_front) {
+    SUMeshHelperGetBackSTQCoords(mesh_ref, num_vertices, stq.data(),
+                                 &stq_count);
+  } else {
+    SUMeshHelperGetFrontSTQCoords(mesh_ref, num_vertices, stq.data(),
+                                  &stq_count);
+  }
 
   size_t n_count = 0;
   SUMeshHelperGetNormals(mesh_ref, num_vertices, norms.data(), &n_count);
@@ -165,13 +177,10 @@ void HierarchyReducer::process_face(Face &face, const Transformation &transform,
 
     // Convert STQ to UV with scaling for SketchUp textures
     SUPoint2D uv_val;
-    if (stq[i].z != 0.0) {
-      uv_val.x = (stq[i].x / stq[i].z) * s_scale;
-      uv_val.y = (stq[i].y / stq[i].z) * t_scale;
-    } else {
-      uv_val.x = stq[i].x * s_scale;
-      uv_val.y = stq[i].y * t_scale;
-    }
+    // Perspective divide (q is z)
+    double q = (stq[i].z == 0.0) ? 1.0 : stq[i].z;
+    uv_val.x = (stq[i].x / q) * s_scale;
+    uv_val.y = (stq[i].y / q) * t_scale;
 
     // Add welded
     add_vertex(mesh_buffer, p_trans, n_trans, uv_val);
@@ -182,30 +191,31 @@ void HierarchyReducer::process_face(Face &face, const Transformation &transform,
 
 void HierarchyReducer::add_vertex(ReducedMesh &mesh, const SUPoint3D &pos,
                                   const SUVector3D &norm, const SUPoint2D &uv) {
-  // Quantize for spatial hashing
-  int64_t kx =
-      static_cast<int64_t>(std::round(pos.x * ReducedMesh::SCALE_FACTOR));
-  int64_t ky =
-      static_cast<int64_t>(std::round(pos.y * ReducedMesh::SCALE_FACTOR));
-  int64_t kz =
-      static_cast<int64_t>(std::round(pos.z * ReducedMesh::SCALE_FACTOR));
+  // Quantize for spatial hashing to prevent welding across UV seams or sharp
+  // edges
+  int64_t kx = static_cast<int64_t>(std::round(pos.x * ReducedMesh::POS_SCALE));
+  int64_t ky = static_cast<int64_t>(std::round(pos.y * ReducedMesh::POS_SCALE));
+  int64_t kz = static_cast<int64_t>(std::round(pos.z * ReducedMesh::POS_SCALE));
 
-  ReducedMesh::VertexKey key = std::make_tuple(kx, ky, kz);
+  int32_t knx =
+      static_cast<int32_t>(std::round(norm.x * ReducedMesh::NORMAL_SCALE));
+  int32_t kny =
+      static_cast<int32_t>(std::round(norm.y * ReducedMesh::NORMAL_SCALE));
+  int32_t knz =
+      static_cast<int32_t>(std::round(norm.z * ReducedMesh::NORMAL_SCALE));
+
+  int64_t ku = static_cast<int64_t>(std::round(uv.x * ReducedMesh::UV_SCALE));
+  int64_t kv = static_cast<int64_t>(std::round(uv.y * ReducedMesh::UV_SCALE));
+
+  ReducedMesh::VertexKey key =
+      std::make_tuple(kx, ky, kz, knx, kny, knz, ku, kv);
 
   auto it = mesh.unique_map.find(key);
   if (it != mesh.unique_map.end()) {
-    // Exists - verify normal/uv similarity?
-    // For pure geometry welding like `Remove Doubles`, checking position is
-    // usually sufficient. But if normal/UV is distinct, we usually split.
-    // `op_prepare.py` uses strict BMesh remove doubles which merges by
-    // distance. It might merge verts with different UVs, resulting in UV seam
-    // averaging or one winning. For safety, let's just merge by position for
-    // now (optimization focus).
-
-    // Add index
+    // Exists with identical pos, normal, and UV -> reuse
     mesh.indices.push_back(it->second);
   } else {
-    // New vertex
+    // New vertex (or distinct properties)
     int32_t new_idx = static_cast<int32_t>(mesh.vertices.size());
     mesh.vertices.push_back(pos);
     mesh.normals.push_back(norm);
