@@ -71,6 +71,10 @@ public:
   // Traverses the entire model and flattens geometry
   void traverse(const CleanupOptions &options = CleanupOptions());
 
+  // Traverses specific entities (useful for single definitions)
+  void traverse_entities(const Entities &entities,
+                         const CleanupOptions &options = CleanupOptions());
+
   // Returns the buckets
   // Key: Material Name (or "Default")
   const std::map<std::string, ReducedMesh> &get_reduced_geometry() const;

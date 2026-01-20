@@ -8,10 +8,11 @@
 #include <SketchUpAPI/model/mesh_helper.h>
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <map>
 #include <set>
+#include <tuple>
 #include <unordered_map>
-
 
 #define _USE_MATH_DEFINES
 #include <math.h>
@@ -26,8 +27,34 @@ HierarchyReducer::get_reduced_geometry() const {
 }
 
 void HierarchyReducer::traverse(const CleanupOptions &options) {
+  printf("C++: Starting model traversal. Dissolve: %d, Tris-to-Quads: %d, "
+         "Angle: %.3f\n",
+         options.limited_dissolve, options.tris_to_quads,
+         options.angle_limit_radians);
+
   cache_texture_scales();
   process_entities(m_model.entities(), Transformation(), Material());
+
+  printf("C++: model Traversal complete. Materials found: %zu\n",
+         m_buckets.size());
+
+  if (options.limited_dissolve || options.tris_to_quads) {
+    for (auto &it : m_buckets) {
+      size_t before = it.second.face_sizes.size();
+      apply_mesh_cleanup(it.second, options);
+      size_t after = it.second.face_sizes.size();
+      if (before != after) {
+        printf("C++: Optimized [%s]: %zu -> %zu faces\n", it.first.c_str(),
+               before, after);
+      }
+    }
+  }
+}
+
+void HierarchyReducer::traverse_entities(const Entities &entities,
+                                         const CleanupOptions &options) {
+  cache_texture_scales();
+  process_entities(entities, Transformation(), Material());
 
   if (options.limited_dissolve || options.tris_to_quads) {
     for (auto &it : m_buckets) {
@@ -207,12 +234,33 @@ void HierarchyReducer::add_vertex(ReducedMesh &mesh, const SUPoint3D &pos,
   }
 }
 
+// Helper to compute geometric face normal using Newell's method (robust for
+// ngons)
+SUVector3D compute_face_normal(const std::vector<int32_t> &loop,
+                               const std::vector<SUPoint3D> &vertices) {
+  if (loop.size() < 3)
+    return {0.0, 0.0, 1.0};
+
+  double nx = 0, ny = 0, nz = 0;
+  for (size_t i = 0; i < loop.size(); ++i) {
+    const auto &curr = vertices[loop[i]];
+    const auto &next = vertices[loop[(i + 1) % loop.size()]];
+    nx += (curr.y - next.y) * (curr.z + next.z);
+    ny += (curr.z - next.z) * (curr.x + next.x);
+    nz += (curr.x - next.x) * (curr.y + next.y);
+  }
+
+  double len = sqrt(nx * nx + ny * ny + nz * nz);
+  if (len < 1e-12)
+    return {0.0, 0.0, 1.0};
+  return {nx / len, ny / len, nz / len};
+}
+
 void HierarchyReducer::apply_mesh_cleanup(ReducedMesh &mesh,
                                           const CleanupOptions &options) {
   if (mesh.indices.empty())
     return;
 
-  // 1. Build position map for better adjacency (bypass UV splitting)
   using PosKey = std::tuple<int64_t, int64_t, int64_t>;
   std::vector<PosKey> pos_keys;
   pos_keys.reserve(mesh.vertices.size());
@@ -223,13 +271,6 @@ void HierarchyReducer::apply_mesh_cleanup(ReducedMesh &mesh,
          static_cast<int64_t>(std::round(v.z * ReducedMesh::POS_SCALE))});
   }
 
-  // 2. Build face offsets O(N)
-  std::vector<size_t> face_offsets(mesh.face_sizes.size() + 1, 0);
-  for (size_t i = 0; i < mesh.face_sizes.size(); ++i) {
-    face_offsets[i + 1] = face_offsets[i] + mesh.face_sizes[i];
-  }
-
-  // 3. Position-based adjacency map
   struct PosEdge {
     PosKey p1, p2;
     bool operator<(const PosEdge &other) const {
@@ -255,145 +296,32 @@ void HierarchyReducer::apply_mesh_cleanup(ReducedMesh &mesh,
     }
   };
 
-  std::unordered_map<PosEdge, std::vector<size_t>, PosEdgeHasher> edge_to_faces;
-  for (size_t f = 0; f < mesh.face_sizes.size(); f++) {
-    size_t offset = face_offsets[f];
-    int32_t size = mesh.face_sizes[f];
-    for (int32_t i = 0; i < size; i++) {
-      const auto &pk1 = pos_keys[mesh.indices[offset + i]];
-      const auto &pk2 = pos_keys[mesh.indices[offset + (i + 1) % size]];
-      PosEdge e = {std::min(pk1, pk2), std::max(pk1, pk2)};
-      edge_to_faces[e].push_back(f);
-    }
-  }
-
-  // 4. Iterative Merge (Greedy for Quads, then Dissolve for Ngons)
-  std::vector<bool> face_invalid(mesh.face_sizes.size(), false);
   std::vector<std::vector<int32_t>> active_faces;
-  active_faces.reserve(mesh.face_sizes.size());
-  for (size_t f = 0; f < mesh.face_sizes.size(); ++f) {
-    std::vector<int32_t> face_indices;
-    size_t start = face_offsets[f];
-    for (int32_t i = 0; i < mesh.face_sizes[f]; ++i)
-      face_indices.push_back(mesh.indices[start + i]);
-    active_faces.push_back(std::move(face_indices));
+  size_t offset = 0;
+  for (int32_t size : mesh.face_sizes) {
+    std::vector<int32_t> loop;
+    for (int32_t i = 0; i < size; ++i)
+      loop.push_back(mesh.indices[offset + i]);
+    active_faces.push_back(std::move(loop));
+    offset += size;
   }
 
-  bool changed = true;
-  int pass = 0;
-  while (changed && pass < 5) { // Limit iterations
-    changed = false;
-    pass++;
-    for (size_t f1 = 0; f1 < active_faces.size(); ++f1) {
-      if (face_invalid[f1])
-        continue;
-
-      // If only Tris-to-Quads, stop if already a quad
-      if (options.tris_to_quads && !options.limited_dissolve &&
-          active_faces[f1].size() >= 4)
-        continue;
-
-      for (size_t i = 0; i < active_faces[f1].size(); ++i) {
-        const auto &pk1 = pos_keys[active_faces[f1][i]];
-        const auto &pk2 =
-            pos_keys[active_faces[f1][(i + 1) % active_faces[f1].size()]];
-        PosEdge e = {std::min(pk1, pk2), std::max(pk1, pk2)};
-
-        const auto &neighbors = edge_to_faces[e];
-        for (size_t f2 : neighbors) {
-          if (f2 <= f1 || face_invalid[f2])
-            continue;
-
-          // Check planarity
-          const SUVector3D &n1 = mesh.normals[active_faces[f1][0]];
-          const SUVector3D &n2 = mesh.normals[active_faces[f2][0]];
-          double dot = n1.x * n2.x + n1.y * n2.y + n1.z * n2.z;
-          if (dot > std::cos(options.angle_limit_radians)) {
-            // MERGE f2 into f1
-            // 1. Identify common positions in f2 for edge pk2-pk1
-            int j1 = -1, j2 = -1;
-            for (int k = 0; k < active_faces[f2].size(); ++k) {
-              if (pos_keys[active_faces[f2][k]] == pk2)
-                j1 = k;
-              if (pos_keys[active_faces[f2][k]] == pk1)
-                j2 = k;
-            }
-            if (j1 == -1 || j2 == -1 ||
-                ((j1 + 1) % active_faces[f2].size() != j2))
-              continue;
-
-            // 2. Synthesize new loop
-            std::vector<int32_t> new_loop;
-            // Part from f1: from i+1 back around to i
-            for (int k = 0; k < active_faces[f1].size(); ++k) {
-              new_loop.push_back(
-                  active_faces[f1][(i + 1 + k) % active_faces[f1].size()]);
-              if (new_loop.back() == active_faces[f1][i])
-                break;
-            }
-            // Part from f2: from j2 around to j1 (skipping j1-j2 edge which is
-            // shared) Wait, j1->j2 is pk2->pk1. In f1, pk1->pk2 was at i ->
-            // i+1. Loop F1: ... -> pk1 -> pk2 -> ... Loop F2: ... -> pk2 -> pk1
-            // -> ... Merged: ... -> pk1 -> (rest of F2) -> pk2 -> (rest of F1)
-            // -> ...
-            new_loop.clear();
-            for (int k = 0; k < active_faces[f1].size(); k++) {
-              int32_t v =
-                  active_faces[f1][(i + 1 + k) % active_faces[f1].size()];
-              new_loop.push_back(v);
-            }
-            // Insert F2 vertices between pk2 and pk1
-            // pk2 is at original i+1. We just added it.
-            std::vector<int32_t> insert_f2;
-            for (int k = 1; k < active_faces[f2].size() - 1; k++) {
-              insert_f2.push_back(
-                  active_faces[f2][(j1 + 1 + k) % active_faces[f2].size()]);
-            }
-            new_loop.insert(new_loop.begin() + 1, insert_f2.begin(),
-                            insert_f2.end());
-
-            active_faces[f1] = std::move(new_loop);
-            face_invalid[f2] = true;
-            changed = true;
-
-            // Update edge map for f1's new edges (optional but better)
-            // To keep it simple, we'll rely on the while loop for further
-            // merges
-            break;
-          }
-        }
-        if (changed)
-          break;
-      }
-    }
-  }
-
-  // 5. Commit changes back to mesh
-  mesh.indices.clear();
-  mesh.face_sizes.clear();
-  for (size_t f = 0; f < active_faces.size(); ++f) {
-    if (face_invalid[f])
-      continue;
-    // Basic collinear reduction (dissolve mid-edge vertices)
-    const auto &loop = active_faces[f];
+  auto clean_collinear = [&](std::vector<int32_t> &loop) {
     if (loop.size() < 3)
-      continue;
-
-    std::vector<int32_t> clean_loop;
+      return;
+    std::vector<int32_t> next_loop;
     for (size_t i = 0; i < loop.size(); i++) {
       const auto &p1 = pos_keys[loop[(i + loop.size() - 1) % loop.size()]];
       const auto &p2 = pos_keys[loop[i]];
       const auto &p3 = pos_keys[loop[(i + 1) % loop.size()]];
 
-      // Vector p1->p2 and p2->p3
-      double dx1 = static_cast<double>(std::get<0>(p2) - std::get<0>(p1));
-      double dy1 = static_cast<double>(std::get<1>(p2) - std::get<1>(p1));
-      double dz1 = static_cast<double>(std::get<2>(p2) - std::get<2>(p1));
-      double dx2 = static_cast<double>(std::get<0>(p3) - std::get<0>(p2));
-      double dy2 = static_cast<double>(std::get<1>(p3) - std::get<1>(p2));
-      double dz2 = static_cast<double>(std::get<2>(p3) - std::get<2>(p2));
+      double dx1 = (double)(std::get<0>(p2) - std::get<0>(p1));
+      double dy1 = (double)(std::get<1>(p2) - std::get<1>(p1));
+      double dz1 = (double)(std::get<2>(p2) - std::get<2>(p1));
+      double dx2 = (double)(std::get<0>(p3) - std::get<0>(p2));
+      double dy2 = (double)(std::get<1>(p3) - std::get<1>(p2));
+      double dz2 = (double)(std::get<2>(p3) - std::get<2>(p2));
 
-      // Cross product for collinear check
       double cx = dy1 * dz2 - dz1 * dy2;
       double cy = dz1 * dx2 - dx1 * dz2;
       double cz = dx1 * dy2 - dy1 * dx2;
@@ -401,17 +329,142 @@ void HierarchyReducer::apply_mesh_cleanup(ReducedMesh &mesh,
       double len_sq1 = dx1 * dx1 + dy1 * dy1 + dz1 * dz1;
       double len_sq2 = dx2 * dx2 + dy2 * dy2 + dz2 * dz2;
 
-      if (area_sq < 1e-9 * len_sq1 * len_sq2) {
-        // Collinear, skip p2
-      } else {
-        clean_loop.push_back(loop[i]);
+      if (area_sq < 1e-10 * len_sq1 * len_sq2)
+        continue; // Collinear
+      next_loop.push_back(loop[i]);
+    }
+    loop = std::move(next_loop);
+  };
+
+  // Initial cleaning
+  for (auto &loop : active_faces) {
+    clean_collinear(loop);
+  }
+
+  std::vector<bool> face_invalid(active_faces.size(), false);
+  std::unordered_map<PosEdge, std::vector<size_t>, PosEdgeHasher> edge_to_faces;
+  auto rebuild_edge_map = [&]() {
+    edge_to_faces.clear();
+    for (size_t f = 0; f < active_faces.size(); f++) {
+      if (face_invalid[f])
+        continue;
+      int32_t size = static_cast<int32_t>(active_faces[f].size());
+      for (int32_t i = 0; i < size; i++) {
+        const auto &pk1 = pos_keys[active_faces[f][i]];
+        const auto &pk2 = pos_keys[active_faces[f][(i + 1) % size]];
+        PosEdge e = {std::min(pk1, pk2), std::max(pk1, pk2)};
+        edge_to_faces[e].push_back(f);
       }
     }
+  };
 
-    if (clean_loop.size() >= 3) {
-      mesh.indices.insert(mesh.indices.end(), clean_loop.begin(),
-                          clean_loop.end());
-      mesh.face_sizes.push_back(static_cast<int32_t>(clean_loop.size()));
+  rebuild_edge_map();
+
+  bool changed = true;
+  int pass = 0;
+
+  std::vector<SUVector3D> face_normals(active_faces.size());
+  for (size_t f = 0; f < active_faces.size(); f++) {
+    face_normals[f] = compute_face_normal(active_faces[f], mesh.vertices);
+  }
+
+  while (changed && pass < 40) {
+    changed = false;
+    pass++;
+
+    // Greedy pass: attempt to merge everything we can in one go
+    for (size_t f1 = 0; f1 < active_faces.size(); f1++) {
+      if (face_invalid[f1])
+        continue;
+      if (options.tris_to_quads && !options.limited_dissolve &&
+          active_faces[f1].size() >= 4)
+        continue;
+
+      // We treat n1 as constant for the life of f1 in this pass
+      // UNLESS f1 is modified.
+
+      for (size_t i = 0; i < active_faces[f1].size(); i++) {
+        const auto &pk1 = pos_keys[active_faces[f1][i]];
+        const auto &pk2 =
+            pos_keys[active_faces[f1][(i + 1) % active_faces[f1].size()]];
+        PosEdge e = {std::min(pk1, pk2), std::max(pk1, pk2)};
+
+        auto it_neighbors = edge_to_faces.find(e);
+        if (it_neighbors == edge_to_faces.end())
+          continue;
+
+        bool merged_this_edge = false;
+        for (size_t f2 : it_neighbors->second) {
+          if (f2 == f1 || face_invalid[f2])
+            continue;
+          if (options.tris_to_quads && !options.limited_dissolve &&
+              active_faces[f2].size() != 3)
+            continue;
+
+          // Geometric planarity check - Normals are cached!
+          const SUVector3D &n1 = face_normals[f1];
+          const SUVector3D &n2 = face_normals[f2];
+          double dot = n1.x * n2.x + n1.y * n2.y + n1.z * n2.z;
+
+          if (dot > std::cos(options.angle_limit_radians + 0.001)) {
+            // Find shared edge in f2
+            int j1 = -1, j2 = -1;
+            size_t size2 = active_faces[f2].size();
+            for (size_t k = 0; k < size2; k++) {
+              if (pos_keys[active_faces[f2][k]] == pk2)
+                j1 = (int)k;
+              if (pos_keys[active_faces[f2][k]] == pk1)
+                j2 = (int)k;
+            }
+            if (j1 == -1 || j2 == -1 || (j1 + 1) % (int)size2 != j2)
+              continue;
+
+            // Synthesis new loop
+            std::vector<int32_t> new_loop;
+            size_t size1 = active_faces[f1].size();
+            new_loop.reserve(size1 + size2);
+
+            for (size_t k = 0; k <= i; k++)
+              new_loop.push_back(active_faces[f1][k]);
+            for (size_t k = 1; k < size2 - 1; k++) {
+              new_loop.push_back(active_faces[f2][(j2 + k) % size2]);
+            }
+            for (size_t k = i + 1; k < size1; k++) {
+              new_loop.push_back(active_faces[f1][k]);
+            }
+
+            clean_collinear(new_loop);
+
+            if (new_loop.size() >= 3) {
+              active_faces[f1] = std::move(new_loop);
+              face_invalid[f2] = true;
+              // Update f1 normal for future merges in this pass
+              face_normals[f1] =
+                  compute_face_normal(active_faces[f1], mesh.vertices);
+              changed = true;
+              merged_this_edge = true;
+              break;
+            }
+          }
+        }
+        if (merged_this_edge) {
+          i = (size_t)-1; // Restart edge loop for f1 since it was modified
+        }
+      }
+    }
+    if (changed)
+      rebuild_edge_map();
+  }
+
+  mesh.indices.clear();
+  mesh.face_sizes.clear();
+  for (size_t f = 0; f < active_faces.size(); f++) {
+    if (face_invalid[f])
+      continue;
+    const auto &loop = active_faces[f];
+    if (loop.size() >= 3) {
+      mesh.indices.insert(mesh.indices.end(), loop.begin(), loop.end());
+      mesh.face_sizes.push_back(static_cast<int32_t>(loop.size()));
     }
   }
 }
