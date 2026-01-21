@@ -32,6 +32,8 @@ void HierarchyReducer::traverse(const CleanupOptions &options) {
          options.limited_dissolve, options.tris_to_quads,
          options.angle_limit_radians);
 
+  cache_texture_scales(); // Fix: Ensure texture scales are cached for UV
+                          // calculation
   process_entities(m_model.entities(), Transformation(), Material(), 0);
 
   finalize(options);
@@ -50,13 +52,12 @@ void HierarchyReducer::finalize(const CleanupOptions &options) {
     }
   }
 
-  // Final pass: Convert all vertices from inches to meters
-  const double INCH_TO_METER = 0.0254;
+  // Final pass: Convert all vertices from inches to meters (or requested scale)
   for (auto &it : m_buckets) {
     for (auto &v : it.second.vertices) {
-      v.x *= INCH_TO_METER;
-      v.y *= INCH_TO_METER;
-      v.z *= INCH_TO_METER;
+      v.x *= options.unit_scale;
+      v.y *= options.unit_scale;
+      v.z *= options.unit_scale;
     }
   }
 }
@@ -119,18 +120,32 @@ void HierarchyReducer::process_entities(const Entities &entities,
 
 void HierarchyReducer::process_face(Face &face, const Transformation &transform,
                                     Material inherited_material) {
-  // Constants
-  const double INCH_TO_METER = 0.0254;
-
   Material front_mat = face.material();
+  Material back_mat = face.back_material();
   bool has_front = front_mat.is_valid();
+  bool has_back = back_mat.is_valid();
 
   double det = transform.determinant();
   bool is_mirrored = (det < 0.0);
 
-  // We process ONLY the Front side, matching HierarchyWalker behavior.
-  // Material inheritance: Prioritize direct Front material, then inherited.
-  Material active_mat = has_front ? front_mat : inherited_material;
+  // Material selection logic: Direct Front > Direct Back > Inherited
+  // We prioritize the front material if present, then fallback to back or
+  // inherited.
+  Material active_mat;
+  bool use_front_side = true;
+  bool is_direct = false;
+
+  if (has_front) {
+    active_mat = front_mat;
+    is_direct = true;
+  } else if (has_back) {
+    active_mat = back_mat;
+    use_front_side = false;
+    is_direct = true;
+  } else {
+    active_mat = inherited_material;
+    is_direct = false;
+  }
 
   std::string mat_name = "SketchUp_Default";
   if (active_mat.is_valid()) {
@@ -170,7 +185,7 @@ void HierarchyReducer::process_face(Face &face, const Transformation &transform,
   // UV Scale logic
   double s_scale = 1.0;
   double t_scale = 1.0;
-  if (!has_front && active_mat.is_valid()) {
+  if (!is_direct && active_mat.is_valid()) {
     auto it_scale = m_texture_scale_cache.find(mat_name);
     if (it_scale != m_texture_scale_cache.end()) {
       s_scale = it_scale->second.first;
@@ -180,7 +195,13 @@ void HierarchyReducer::process_face(Face &face, const Transformation &transform,
 
   std::vector<SUPoint3D> stq(num_vertices);
   size_t stq_count = 0;
-  SUMeshHelperGetFrontSTQCoords(mesh_ref, num_vertices, stq.data(), &stq_count);
+  if (use_front_side) {
+    SUMeshHelperGetFrontSTQCoords(mesh_ref, num_vertices, stq.data(),
+                                  &stq_count);
+  } else {
+    SUMeshHelperGetBackSTQCoords(mesh_ref, num_vertices, stq.data(),
+                                 &stq_count);
+  }
 
   // If the transformation is mirrored, we must flip the winding to stay CCW in
   // world space. This is ESSENTIAL for baked geometry where the instance

@@ -62,6 +62,7 @@ struct CleanupOptions {
   bool limited_dissolve = false;
   bool tris_to_quads = false;
   double angle_limit_radians = 0.0872665; // ~5 degrees
+  double unit_scale = 0.0254;             // Inch to Meter by default
 };
 
 class HierarchyReducer {
