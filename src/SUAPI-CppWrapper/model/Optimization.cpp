@@ -128,19 +128,14 @@ void HierarchyReducer::process_face(Face &face, const Transformation &transform,
   double det = transform.determinant();
   bool is_mirrored = (det < 0.0);
 
-  // Material selection logic: Direct Front > Direct Back > Inherited
-  // We prioritize the front material if present, then fallback to back or
-  // inherited.
+  // Material selection logic: Direct Front > Inherited
+  // Matches unoptimized behavior (mesh_builder.py) by ignoring back materials.
   Material active_mat;
   bool use_front_side = true;
   bool is_direct = false;
 
   if (has_front) {
     active_mat = front_mat;
-    is_direct = true;
-  } else if (has_back) {
-    active_mat = back_mat;
-    use_front_side = false;
     is_direct = true;
   } else {
     active_mat = inherited_material;
