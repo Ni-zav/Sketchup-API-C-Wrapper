@@ -100,6 +100,7 @@ private:
   void cache_texture_scales();
 
   // Mesh cleanup logic
+  void finalize(const CleanupOptions &options);
   void apply_mesh_cleanup(ReducedMesh &mesh, const CleanupOptions &options);
 };
 

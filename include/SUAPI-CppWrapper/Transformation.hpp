@@ -31,7 +31,6 @@
 #include <array>
 #include <stdio.h>
 
-
 #include <SketchUpAPI/geometry/transformation.h>
 
 #include "SUAPI-CppWrapper/Geometry.hpp"
@@ -52,11 +51,6 @@ private:
    * @return double[4] array representing 4x1 matrix
    */
   std::array<double, 4> multiply4x1(std::array<double, 4> matrix4_1) const;
-
-  /**
-   * Returns the determinant of the matrix.
-   */
-  double determinant() const;
 
 public:
   /**
@@ -141,6 +135,11 @@ public:
    */
   Transformation(const Transformation &transform1,
                  const Transformation &transform2, double weight);
+
+  /**
+   * Returns the determinant of the matrix.
+   */
+  double determinant() const;
 
   /*
    * Allows access to the array of numbers in the SUTransformation struct.

@@ -32,12 +32,12 @@ void HierarchyReducer::traverse(const CleanupOptions &options) {
          options.limited_dissolve, options.tris_to_quads,
          options.angle_limit_radians);
 
-  cache_texture_scales();
   process_entities(m_model.entities(), Transformation(), Material(), 0);
 
-  printf("C++: model Traversal complete. Materials found: %zu\n",
-         m_buckets.size());
+  finalize(options);
+}
 
+void HierarchyReducer::finalize(const CleanupOptions &options) {
   if (options.limited_dissolve || options.tris_to_quads) {
     for (auto &it : m_buckets) {
       size_t before = it.second.face_sizes.size();
@@ -49,6 +49,16 @@ void HierarchyReducer::traverse(const CleanupOptions &options) {
       }
     }
   }
+
+  // Final pass: Convert all vertices from inches to meters
+  const double INCH_TO_METER = 0.0254;
+  for (auto &it : m_buckets) {
+    for (auto &v : it.second.vertices) {
+      v.x *= INCH_TO_METER;
+      v.y *= INCH_TO_METER;
+      v.z *= INCH_TO_METER;
+    }
+  }
 }
 
 void HierarchyReducer::traverse_entities(const Entities &entities,
@@ -56,11 +66,7 @@ void HierarchyReducer::traverse_entities(const Entities &entities,
   cache_texture_scales();
   process_entities(entities, Transformation(), Material(), 0);
 
-  if (options.limited_dissolve || options.tris_to_quads) {
-    for (auto &it : m_buckets) {
-      apply_mesh_cleanup(it.second, options);
-    }
-  }
+  finalize(options);
 }
 
 void HierarchyReducer::cache_texture_scales() {
@@ -113,30 +119,22 @@ void HierarchyReducer::process_entities(const Entities &entities,
 
 void HierarchyReducer::process_face(Face &face, const Transformation &transform,
                                     Material inherited_material) {
-  Material front_mat = face.material();
-  Material back_mat = face.back_material();
-  bool has_front = front_mat.is_valid();
-  bool has_back = back_mat.is_valid();
+  // Constants
+  const double INCH_TO_METER = 0.0254;
 
-  // Material inheritance: prioritized Front > Inherited
-  // Matching unoptimized importer behavior (ignoring back material)
+  Material front_mat = face.material();
+  bool has_front = front_mat.is_valid();
+
+  double det = transform.determinant();
+  bool is_mirrored = (det < 0.0);
+
+  // We process ONLY the Front side, matching HierarchyWalker behavior.
+  // Material inheritance: Prioritize direct Front material, then inherited.
   Material active_mat = has_front ? front_mat : inherited_material;
 
   std::string mat_name = "SketchUp_Default";
   if (active_mat.is_valid()) {
     mat_name = active_mat.name().std_string();
-  }
-
-  bool is_direct = has_front || has_back;
-  double s_scale = 1.0;
-  double t_scale = 1.0;
-
-  if (!is_direct && active_mat.is_valid()) {
-    auto it_scale = m_texture_scale_cache.find(mat_name);
-    if (it_scale != m_texture_scale_cache.end()) {
-      s_scale = it_scale->second.first;
-      t_scale = it_scale->second.second;
-    }
   }
 
   if (m_buckets.find(mat_name) == m_buckets.end()) {
@@ -158,33 +156,60 @@ void HierarchyReducer::process_face(Face &face, const Transformation &transform,
   }
 
   std::vector<SUPoint3D> verts(num_vertices);
-  std::vector<SUPoint3D> stq(num_vertices);
   std::vector<SUVector3D> norms(num_vertices);
   std::vector<size_t> indices_flat(num_triangles * 3);
 
   size_t v_count = 0;
   SUMeshHelperGetVertices(mesh_ref, num_vertices, verts.data(), &v_count);
-  size_t stq_count = 0;
-  if (has_back && !has_front) {
-    SUMeshHelperGetBackSTQCoords(mesh_ref, num_vertices, stq.data(),
-                                 &stq_count);
-  } else {
-    SUMeshHelperGetFrontSTQCoords(mesh_ref, num_vertices, stq.data(),
-                                  &stq_count);
-  }
   size_t n_count = 0;
   SUMeshHelperGetNormals(mesh_ref, num_vertices, norms.data(), &n_count);
   size_t i_count = 0;
   SUMeshHelperGetVertexIndices(mesh_ref, num_triangles * 3, indices_flat.data(),
                                &i_count);
 
+  // UV Scale logic
+  double s_scale = 1.0;
+  double t_scale = 1.0;
+  if (!has_front && active_mat.is_valid()) {
+    auto it_scale = m_texture_scale_cache.find(mat_name);
+    if (it_scale != m_texture_scale_cache.end()) {
+      s_scale = it_scale->second.first;
+      t_scale = it_scale->second.second;
+    }
+  }
+
+  std::vector<SUPoint3D> stq(num_vertices);
+  size_t stq_count = 0;
+  SUMeshHelperGetFrontSTQCoords(mesh_ref, num_vertices, stq.data(), &stq_count);
+
+  // If the transformation is mirrored, we must flip the winding to stay CCW in
+  // world space. This is ESSENTIAL for baked geometry where the instance
+  // matrix is discarded.
+  bool flip_winding = is_mirrored;
+
   for (size_t i = 0; i < indices_flat.size(); i += 3) {
-    for (int j = 0; j < 3; j++) {
+    for (int j_off = 0; j_off < 3; j_off++) {
+      // Winding flip: swap index 1 and 2 if flip_winding is true
+      int j = j_off;
+      if (flip_winding) {
+        if (j_off == 1)
+          j = 2;
+        else if (j_off == 2)
+          j = 1;
+      }
+
       size_t idx = indices_flat[i + j];
       if (idx >= num_vertices)
         continue;
 
-      CW::Point3D p_trans_cw = transform * CW::Point3D(verts[idx]);
+      // Transform point.
+      // Note: We do NOT scale to meters here yet, to maintain welding
+      // precision. Scaling is performed as a final pass in finalize().
+      CW::Point3D p_raw(verts[idx]);
+      CW::Point3D p_trans_cw = transform * p_raw;
+
+      // Transform normal. Normals are direction vectors, they don't get scaled
+      // by INCH_TO_METER but do get transformed.
       SUVector3D n_trans = transform * CW::Vector3D(norms[idx]);
 
       double len_sq =
