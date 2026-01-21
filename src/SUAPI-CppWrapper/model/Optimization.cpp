@@ -420,12 +420,9 @@ void HierarchyReducer::apply_mesh_cleanup(ReducedMesh &mesh,
     face_normals[f] = compute_face_normal(active_faces[f], mesh.vertices);
   }
 
-  // Performance: reduced max passes from 40 to 20, with early exit on low merge
-  // rate
-  while (changed && pass < 20) {
+  while (changed && pass < 40) {
     changed = false;
     pass++;
-    size_t merges_this_pass = 0; // Track merge efficiency
 
     // Greedy pass: attempt to merge everything we can in one go
     for (size_t f1 = 0; f1 < active_faces.size(); f1++) {
@@ -508,7 +505,7 @@ void HierarchyReducer::apply_mesh_cleanup(ReducedMesh &mesh,
                   compute_face_normal(active_faces[f1], mesh.vertices);
               changed = true;
               merged_this_edge = true;
-              merges_this_pass++; // Track merges for early exit
+
               break;
             }
           }
@@ -518,10 +515,7 @@ void HierarchyReducer::apply_mesh_cleanup(ReducedMesh &mesh,
         }
       }
     }
-    // Early exit: if merge rate drops below 1% after first few passes, stop
-    if (pass > 5 && merges_this_pass < active_faces.size() / 100 + 1) {
-      break;
-    }
+
     if (changed)
       rebuild_edge_map();
   }
