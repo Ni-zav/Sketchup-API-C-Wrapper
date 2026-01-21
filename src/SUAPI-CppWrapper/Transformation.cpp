@@ -37,14 +37,12 @@
 #include <SketchUpAPI/geometry/point3d.h>
 #include <SketchUpAPI/geometry/vector3d.h>
 
-
 #include "SUAPI-CppWrapper/model/Axes.hpp"
 #include "SUAPI-CppWrapper/model/Face.hpp"
 #include "SUAPI-CppWrapper/model/Loop.hpp"
 #include "SUAPI-CppWrapper/model/LoopInput.hpp"
 #include "SUAPI-CppWrapper/model/Material.hpp"
 #include "SUAPI-CppWrapper/model/Vertex.hpp"
-
 
 namespace CW {
 
@@ -350,7 +348,7 @@ Point3D operator*(const Transformation &lhs, const Point3D &rhs) {
   SUResult res = SUPoint3DTransform(&lhs.m_transformation, &transformed);
   assert(res == SU_ERROR_NONE);
   _unused(res);
-  return Vector3D(transformed);
+  return Point3D(transformed);
 }
 
 Point3D operator*(const Point3D &lhs, const Transformation &rhs) {

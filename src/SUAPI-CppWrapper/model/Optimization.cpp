@@ -118,8 +118,9 @@ void HierarchyReducer::process_face(Face &face, const Transformation &transform,
   bool has_front = front_mat.is_valid();
   bool has_back = back_mat.is_valid();
 
-  Material active_mat =
-      has_front ? front_mat : (has_back ? back_mat : inherited_material);
+  // Material inheritance: prioritized Front > Inherited
+  // Matching unoptimized importer behavior (ignoring back material)
+  Material active_mat = has_front ? front_mat : inherited_material;
 
   std::string mat_name = "SketchUp_Default";
   if (active_mat.is_valid()) {
@@ -426,6 +427,16 @@ void HierarchyReducer::apply_mesh_cleanup(ReducedMesh &mesh,
             }
             if (j1 == -1 || j2 == -1 || (j1 + 1) % (int)size2 != j2)
               continue;
+
+            // UV/Normal Seam Check: Only merge if the indices are identical.
+            // If the indices differ, it means the vertices have different UVs
+            // or Normals. Note: Shared edge has opposite winding in f2: (j2 ->
+            // j1) matches (i -> i+1)
+            if (active_faces[f1][i] != active_faces[f2][j2] ||
+                active_faces[f1][(i + 1) % active_faces[f1].size()] !=
+                    active_faces[f2][j1]) {
+              continue; // Skip merge to preserve UV/Normal seam
+            }
 
             // Synthesis new loop
             std::vector<int32_t> new_loop;
