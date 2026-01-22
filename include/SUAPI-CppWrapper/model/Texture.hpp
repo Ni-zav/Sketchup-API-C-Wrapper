@@ -219,17 +219,9 @@ public:
    */
   SUResult save_original(const std::string &file_path) const;
 
-  /**
-   * Returns the colorized ImageRep object of the texture.
-   * @since SU 2018, API 6.0
-   */
-  ImageRep colorized_image_rep() const;
-
-  /**
-   * Writes the colorized texture to disk.
-   * @since SU 2018, API 6.0
-   */
-  SUResult save_colorized(const std::string &file_path) const;
+  // colorized_image_rep() and save_colorized() removed due to instability
+  // with SUTextureGetColorizedImageRep causing crashes on certain textures
+  // Use save() for colorized output, save_original() for non-colorized
 };
 
 } // END namespace CW

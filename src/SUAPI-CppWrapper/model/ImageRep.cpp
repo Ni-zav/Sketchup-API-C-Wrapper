@@ -150,16 +150,11 @@ void ImageRep::load_file(const std::string file_path) {
 
 SUResult ImageRep::save_to_file(const std::string file_path) const {
   if(!(*this)) {
-    throw std::logic_error("CW::ImageRep::save_to_file(): ImageRep is null");
+    return SU_ERROR_INVALID_INPUT;
   }
   SUResult res = SUImageRepSaveToFile(m_image_rep, file_path.c_str());
-  if (res == SU_ERROR_SERIALIZATION) {
-    throw std::invalid_argument("CW::ImageRep::save_to_file(): Saving file failed. Probably invalid file path given.");
-  }
-  else if (res == SU_ERROR_NO_DATA) {
-    throw std::logic_error("CW::ImageRep::save_to_file(): Image contains no data to save.");
-  }
-  assert(res == SU_ERROR_NONE); _unused(res);
+  // Return the result code without throwing exceptions
+  // Let the caller decide how to handle errors
   return res;
 }
 

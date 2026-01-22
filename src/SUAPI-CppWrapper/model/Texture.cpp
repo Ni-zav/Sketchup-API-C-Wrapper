@@ -333,68 +333,26 @@ void Texture::t_scale(double t_scale) {
 #endif
 
 SUResult Texture::save(const std::string &file_path) const {
+  if (!(*this)) {
+    return SU_ERROR_INVALID_INPUT;
+  }
   const char *cstr = file_path.c_str();
   SUResult res = SUTextureWriteToFile(this->ref(), cstr);
   return res;
 }
 
 SUResult Texture::save_original(const std::string &file_path) const {
+  if (!(*this)) {
+    return SU_ERROR_INVALID_INPUT;
+  }
   const char *cstr = file_path.c_str();
   SUResult res = SUTextureWriteOriginalToFile(this->ref(), cstr);
   return res;
 }
 
-ImageRep Texture::colorized_image_rep() const {
-  if (!(*this)) {
-    throw std::logic_error(
-        "CW::Texture::colorized_image_rep(): Texture is null");
-  }
-  SUImageRepRef image_rep = SU_INVALID;
-  SUResult res = SUImageRepCreate(&image_rep);
-  if (res != SU_ERROR_NONE) {
-    throw std::runtime_error("CW::Texture::colorized_image_rep(): Failed to create ImageRep");
-  }
-  
-  res = SUTextureGetColorizedImageRep(this->ref(), &image_rep);
-  
-  // Handle errors gracefully - SUTextureGetColorizedImageRep can fail
-  // with SU_ERROR_NO_DATA or SU_ERROR_OUT_OF_RANGE for some textures
-  if (res == SU_ERROR_NO_DATA) {
-    // Clean up the created but unfilled image_rep
-    SUImageRepRelease(&image_rep);
-    throw std::runtime_error("CW::Texture::colorized_image_rep(): No colorized data available");
-  }
-  else if (res == SU_ERROR_OUT_OF_RANGE) {
-    // Clean up the created but invalid image_rep
-    SUImageRepRelease(&image_rep);
-    throw std::runtime_error("CW::Texture::colorized_image_rep(): Pixel data out of range");
-  }
-  else if (res != SU_ERROR_NONE) {
-    // Clean up on any other error
-    SUImageRepRelease(&image_rep);
-    throw std::runtime_error("CW::Texture::colorized_image_rep(): Failed to get colorized image rep");
-  }
-  
-  // CRITICAL: SUTextureGetColorizedImageRep creates a new ImageRep that we own.
-  // Must set attached=false so destructor will properly release the reference.
-  return ImageRep(image_rep, false);
-}
+// colorized_image_rep removed - SUTextureGetColorizedImageRep is unstable
+// Use save() for colorized textures, save_original() for non-colorized
 
-SUResult Texture::save_colorized(const std::string &file_path) const {
-  try {
-    ImageRep colorized = this->colorized_image_rep();
-    if (!colorized) {
-      return SU_ERROR_NO_DATA;
-    }
-    return colorized.save_to_file(file_path);
-  }
-  catch (const std::runtime_error& e) {
-    // colorized_image_rep() threw an exception (NO_DATA, OUT_OF_RANGE, etc.)
-    return SU_ERROR_NO_DATA;
-  }
-  catch (...) {
-    return SU_ERROR_GENERIC;
-  }
-}
+// save_colorized removed - use save() instead which writes colorized texture via SUTextureWriteToFile
 
 } /* namespace CW */
