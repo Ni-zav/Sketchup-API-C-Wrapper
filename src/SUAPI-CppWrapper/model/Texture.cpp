@@ -351,22 +351,50 @@ ImageRep Texture::colorized_image_rep() const {
   }
   SUImageRepRef image_rep = SU_INVALID;
   SUResult res = SUImageRepCreate(&image_rep);
-  assert(res == SU_ERROR_NONE);
+  if (res != SU_ERROR_NONE) {
+    throw std::runtime_error("CW::Texture::colorized_image_rep(): Failed to create ImageRep");
+  }
+  
   res = SUTextureGetColorizedImageRep(this->ref(), &image_rep);
-  assert(res == SU_ERROR_NONE);
-  _unused(res);
+  
+  // Handle errors gracefully - SUTextureGetColorizedImageRep can fail
+  // with SU_ERROR_NO_DATA or SU_ERROR_OUT_OF_RANGE for some textures
+  if (res == SU_ERROR_NO_DATA) {
+    // Clean up the created but unfilled image_rep
+    SUImageRepRelease(&image_rep);
+    throw std::runtime_error("CW::Texture::colorized_image_rep(): No colorized data available");
+  }
+  else if (res == SU_ERROR_OUT_OF_RANGE) {
+    // Clean up the created but invalid image_rep
+    SUImageRepRelease(&image_rep);
+    throw std::runtime_error("CW::Texture::colorized_image_rep(): Pixel data out of range");
+  }
+  else if (res != SU_ERROR_NONE) {
+    // Clean up on any other error
+    SUImageRepRelease(&image_rep);
+    throw std::runtime_error("CW::Texture::colorized_image_rep(): Failed to get colorized image rep");
+  }
+  
   // CRITICAL: SUTextureGetColorizedImageRep creates a new ImageRep that we own.
   // Must set attached=false so destructor will properly release the reference.
-  // Setting attached=true was causing memory corruption and crash.
   return ImageRep(image_rep, false);
 }
 
 SUResult Texture::save_colorized(const std::string &file_path) const {
-  ImageRep colorized = this->colorized_image_rep();
-  if (!colorized) {
+  try {
+    ImageRep colorized = this->colorized_image_rep();
+    if (!colorized) {
+      return SU_ERROR_NO_DATA;
+    }
+    return colorized.save_to_file(file_path);
+  }
+  catch (const std::runtime_error& e) {
+    // colorized_image_rep() threw an exception (NO_DATA, OUT_OF_RANGE, etc.)
     return SU_ERROR_NO_DATA;
   }
-  return colorized.save_to_file(file_path);
+  catch (...) {
+    return SU_ERROR_GENERIC;
+  }
 }
 
 } /* namespace CW */
