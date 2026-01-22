@@ -13,8 +13,8 @@
 // copies of the Software, and to permit persons to whom the Software is
 // furnished to do so, subject to the following conditions:
 
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
 
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -28,16 +28,15 @@
 #include "SUAPI-CppWrapper/model/TextureWriter.hpp"
 namespace CW {
 
-TextureWriter::TextureWriter() {
+TextureWriter::TextureWriter() : m_texture_writer(SU_INVALID) {}
+
+TextureWriter::TextureWriter(SUTextureWriterRef texture_writer)
+    : m_texture_writer(texture_writer) {}
+
+TextureWriter::operator SUTextureWriterRef() const { return m_texture_writer; }
+
+TextureWriter::operator SUTextureWriterRef *() const {
+  return const_cast<SUTextureWriterRef *>(&m_texture_writer);
 }
 
-TextureWriter::TextureWriter(SUTextureWriterRef texture_writer) {
-}
-
-TextureWriter::operator SUTextureWriterRef() const {
-}
-
-TextureWriter::operator SUTextureWriterRef*() const {
-}
-
-}
+} // namespace CW

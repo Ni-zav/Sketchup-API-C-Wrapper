@@ -13,8 +13,8 @@
 // copies of the Software, and to permit persons to whom the Software is
 // furnished to do so, subject to the following conditions:
 
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
 
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -28,16 +28,15 @@
 #include "SUAPI-CppWrapper/model/UVHelper.hpp"
 namespace CW {
 
-UVHelper::UVHelper() {
-}
+UVHelper::UVHelper() : m_uv_helper(SU_INVALID), m_attached(false) {}
 
-UVHelper::UVHelper(SUUVHelperRef uv_helper_ref, bool release_on_destroy) {
-}
+UVHelper::UVHelper(SUUVHelperRef uv_helper_ref, bool release_on_destroy)
+    : m_uv_helper(uv_helper_ref), m_attached(!release_on_destroy) {}
 
-UVHelper::operator SUUVHelperRef() const {
-}
+UVHelper::operator SUUVHelperRef() const { return m_uv_helper; }
 
-UVHelper::operator SUUVHelperRef*() const {
+UVHelper::operator SUUVHelperRef *() const {
+  return const_cast<SUUVHelperRef *>(&m_uv_helper);
 }
 
 } /* namespace CW */
