@@ -226,7 +226,9 @@ ImageRep Texture::image_rep() const {
   res = SUTextureGetImageRep(this->ref(), &image_rep);
   assert(res == SU_ERROR_NONE);
   _unused(res);
-  return ImageRep(image_rep, true); // TODO: check if attached should be true
+  // Note: SUTextureGetImageRep populates our created image_rep object.
+  // The ImageRep object is newly created and we own it, so attached=false.
+  return ImageRep(image_rep, false);
 }
 
 String Texture::file_name() const {
@@ -353,7 +355,10 @@ ImageRep Texture::colorized_image_rep() const {
   res = SUTextureGetColorizedImageRep(this->ref(), &image_rep);
   assert(res == SU_ERROR_NONE);
   _unused(res);
-  return ImageRep(image_rep, true);
+  // CRITICAL: SUTextureGetColorizedImageRep creates a new ImageRep that we own.
+  // Must set attached=false so destructor will properly release the reference.
+  // Setting attached=true was causing memory corruption and crash.
+  return ImageRep(image_rep, false);
 }
 
 SUResult Texture::save_colorized(const std::string &file_path) const {
