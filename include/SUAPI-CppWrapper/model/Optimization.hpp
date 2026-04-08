@@ -22,13 +22,14 @@ struct ReducedMesh {
   std::vector<SUPoint3D> vertices;
   std::vector<SUVector3D> normals;
   std::vector<SUPoint2D> uvs;
+  std::vector<SUPoint2D> back_uvs;
   std::vector<int32_t> indices;
   std::vector<int32_t> face_sizes;
 
   // Spatial hashing for vertex welding
-  // Key: (px, py, pz, nx, ny, nz, u, v) quantized
+  // Key: (px, py, pz, nx, ny, nz, u, v, back_u, back_v) quantized
   using VertexKey = std::tuple<int64_t, int64_t, int64_t, int32_t, int32_t,
-                               int32_t, int64_t, int64_t>;
+                               int32_t, int64_t, int64_t, int64_t, int64_t>;
 
   struct KeyHasher {
     std::size_t operator()(const VertexKey &k) const {
@@ -45,6 +46,8 @@ struct ReducedMesh {
       combine(std::get<5>(k));
       combine(std::get<6>(k));
       combine(std::get<7>(k));
+      combine(std::get<8>(k));
+      combine(std::get<9>(k));
       return seed;
     }
   };
@@ -61,6 +64,7 @@ struct ReducedMesh {
 struct CleanupOptions {
   bool limited_dissolve = false;
   bool tris_to_quads = false;
+  bool two_sided_materials = false;
   double angle_limit_radians = 0.0872665; // ~5 degrees
   double unit_scale = 0.0254;             // Inch to Meter by default
 };
@@ -89,13 +93,17 @@ private:
 
   void process_entities(const Entities &entities,
                         const Transformation &transform,
-                        Material inherited_material, int depth);
+                        Material inherited_material, int depth,
+                        const CleanupOptions &options);
   void process_face(Face &face, const Transformation &transform,
-                    Material inherited_material);
+                    Material inherited_material,
+                    bool collection_has_direct_front_materials,
+                    const CleanupOptions &options);
 
   // Helper to add vertex with welding
   void add_vertex(ReducedMesh &mesh, const SUPoint3D &pos,
-                  const SUVector3D &norm, const SUPoint2D &uv);
+                  const SUVector3D &norm, const SUPoint2D &uv,
+                  const SUPoint2D *back_uv = nullptr);
 
   // Helper to load texture scales
   void cache_texture_scales();
