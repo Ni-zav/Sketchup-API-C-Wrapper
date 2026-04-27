@@ -601,7 +601,10 @@ String Model::name() const {
     throw std::logic_error("CW::Model::name(): Model is null");
   }
   SUStringRef name = SU_INVALID;
-  SUModelGetName(m_model, &name);
+  SUResult res = SUStringCreate(&name);
+  assert(res == SU_ERROR_NONE);
+  res = SUModelGetName(m_model, &name);
+  assert(res == SU_ERROR_NONE); _unused(res);
   return String(name);
 }
 
