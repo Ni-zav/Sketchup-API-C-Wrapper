@@ -359,15 +359,13 @@ ComponentInstance Entities::add_instance(const ComponentDefinition& definition, 
   SUTransformation transform = transformation.ref();
   res = SUComponentInstanceSetTransform(instance, &transform);
   assert(res == SU_ERROR_NONE);
-  if (name.empty()) {
-    res = SUEntitiesAddInstance(m_entities, instance, NULL);
-  }
-  else {
-    SUStringRef name_ref = name.ref();
-    res = SUEntitiesAddInstance(m_entities, instance, &name_ref);
-  }
+  res = SUEntitiesAddInstance(m_entities, instance, NULL);
   assert(res == SU_ERROR_NONE); _unused(res);
-  return ComponentInstance(instance, true);
+  ComponentInstance new_instance(instance, true);
+  if (!name.empty()) {
+    new_instance.name(name);
+  }
+  return new_instance;
 }
 
 
