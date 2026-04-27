@@ -29,11 +29,13 @@
 // Macro for getting rid of unused variables commonly for assert checking
 #define _unused(x) ((void)(x))
 
+#include <algorithm>
 #include <cassert>
 #include <iostream>
 
 #include "SUAPI-CppWrapper/model/GeometryInputHelper.hpp"
 
+#include "SUAPI-CppWrapper/String.hpp"
 #include "SUAPI-CppWrapper/model/Layer.hpp"
 #include "SUAPI-CppWrapper/model/Material.hpp"
 #include "SUAPI-CppWrapper/model/Model.hpp"
@@ -64,10 +66,19 @@ bool MaterialDictionary::add_reference(const Material& key, const Material& valu
 
 Material MaterialDictionary::get_reference(const Material& key) const {
   std::unordered_map<Material, Material>::const_iterator found_material = m_material_map.find(key);
-  if (found_material == m_material_map.end()) {
-    throw std::logic_error("CW::MaterialDictionary::get_reference(): material was not found in the Dictionary - ensure target model is loaded with all the materials needed, and build the mapping of MaterialDictionary prior to using this method.");
+  if (found_material != m_material_map.end()) {
+    return found_material->second;
   }
-  return found_material->second;
+
+  const std::string key_name = key.name();
+  const auto found_by_name = std::find_if(
+      m_material_map.begin(), m_material_map.end(),
+      [&key_name](const auto &entry) { return entry.first.name() == key_name; });
+  if (found_by_name != m_material_map.end()) {
+    return found_by_name->second;
+  }
+
+  throw std::logic_error("CW::MaterialDictionary::get_reference(): material was not found in the Dictionary - ensure target model is loaded with all the materials needed, and build the mapping of MaterialDictionary prior to using this method.");
 }
 
 
@@ -94,10 +105,19 @@ bool LayerDictionary::add_reference(const Layer& key, const Layer& value) {
 
 Layer LayerDictionary::get_reference(const Layer& key) const {
   std::unordered_map<Layer, Layer>::const_iterator found_layer = m_layer_map.find(key);
-  if (found_layer == m_layer_map.end()) {
-    throw std::logic_error("CW::LayerDictionary::get_reference(): layer was not found in the Dictionary - ensure target model is loaded with all the layers needed, and build the mapping of LayerDictionary prior to using this method.");
+  if (found_layer != m_layer_map.end()) {
+    return found_layer->second;
   }
-  return found_layer->second;
+
+  const std::string key_name = key.name();
+  const auto found_by_name = std::find_if(
+      m_layer_map.begin(), m_layer_map.end(),
+      [&key_name](const auto &entry) { return entry.first.name() == key_name; });
+  if (found_by_name != m_layer_map.end()) {
+    return found_by_name->second;
+  }
+
+  throw std::logic_error("CW::LayerDictionary::get_reference(): layer was not found in the Dictionary - ensure target model is loaded with all the layers needed, and build the mapping of LayerDictionary prior to using this method.");
 }
 
 

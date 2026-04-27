@@ -56,6 +56,10 @@ SUComponentDefinitionRef ComponentDefinition::copy_reference(const ComponentDefi
   // The other definition has not been attached to the model, so copy its properties to a new object
   SUComponentDefinitionRef new_definition = create_definition();
   if (SUIsValid(other.m_entity)) {
+    ComponentDefinition new_definition_wrapper(new_definition, false);
+    new_definition_wrapper.name(other.name());
+    new_definition_wrapper.behavior(other.behavior());
+
     // Copy across all nested geometry
     SUEntitiesRef new_entities_ref = SU_INVALID;
     SUResult res = SUComponentDefinitionGetEntities(new_definition, &new_entities_ref);
