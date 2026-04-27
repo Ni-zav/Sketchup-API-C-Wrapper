@@ -52,6 +52,12 @@ class Material :public Entity {
   static SUMaterialRef copy_reference(const Material& mat);
 
   public:
+  /**
+  * Creates a new detached material object suitable for authoring before it is
+  * added to a model.
+  */
+  static Material create();
+
   Material();
   Material(SUMaterialRef material_ref, bool attached = true);
 
