@@ -22,6 +22,7 @@ struct ReducedMesh {
   std::vector<SUPoint3D> vertices;
   std::vector<SUVector3D> normals;
   std::vector<SUPoint2D> uvs;
+  std::vector<SUPoint2D> back_uvs;
   std::vector<int32_t> indices;
   std::vector<int32_t> face_sizes;
 
@@ -61,6 +62,7 @@ struct ReducedMesh {
 struct CleanupOptions {
   bool limited_dissolve = false;
   bool tris_to_quads = false;
+  bool two_sided_materials = false;
   double angle_limit_radians = 0.0872665; // ~5 degrees
   double unit_scale = 0.0254;             // Inch to Meter by default
 };
