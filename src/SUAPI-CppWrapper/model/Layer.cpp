@@ -55,6 +55,8 @@ SULayerRef Layer::copy_reference(const Layer& other) {
   return new_layer;
 }
 
+Layer Layer::create() { return Layer(create_layer(), false); }
+
 /******************************
 ** Constructors / Destructor **
 *******************************/

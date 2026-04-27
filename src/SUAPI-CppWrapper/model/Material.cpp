@@ -62,6 +62,8 @@ SUMaterialRef Material::copy_reference(const Material &other) {
   return create_material();
 }
 
+Material Material::create() { return Material(create_material(), false); }
+
 /*****************************
  * Constructors / Destructor **
  ****************************/
