@@ -49,6 +49,12 @@ class Layer :public Entity {
   
   public:
   /**
+  * Creates a new detached layer object suitable for authoring before it is
+  * added to a model.
+  */
+  static Layer create();
+
+  /**
   * Constructs a NULL layer.
   */
   Layer();
