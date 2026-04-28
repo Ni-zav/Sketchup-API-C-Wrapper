@@ -2,6 +2,7 @@
 #define Optimization_hpp
 
 #include <map>
+#include <limits>
 #include <string>
 #include <tuple>
 #include <unordered_map>
@@ -27,9 +28,9 @@ struct ReducedMesh {
   std::vector<int32_t> face_sizes;
 
   // Spatial hashing for vertex welding
-  // Key: (px, py, pz, nx, ny, nz, u, v) quantized
+  // Key: (px, py, pz, nx, ny, nz, u, v, bu, bv) quantized
   using VertexKey = std::tuple<int64_t, int64_t, int64_t, int32_t, int32_t,
-                               int32_t, int64_t, int64_t>;
+                               int32_t, int64_t, int64_t, int64_t, int64_t>;
 
   struct KeyHasher {
     std::size_t operator()(const VertexKey &k) const {
@@ -46,6 +47,8 @@ struct ReducedMesh {
       combine(std::get<5>(k));
       combine(std::get<6>(k));
       combine(std::get<7>(k));
+      combine(std::get<8>(k));
+      combine(std::get<9>(k));
       return seed;
     }
   };
@@ -91,13 +94,17 @@ private:
 
   void process_entities(const Entities &entities,
                         const Transformation &transform,
-                        Material inherited_material, int depth);
+                        Material inherited_material,
+                        const CleanupOptions &options, int depth);
   void process_face(Face &face, const Transformation &transform,
-                    Material inherited_material);
+                    Material inherited_material,
+                    const CleanupOptions &options,
+                    bool collection_has_direct_front_materials);
 
   // Helper to add vertex with welding
   void add_vertex(ReducedMesh &mesh, const SUPoint3D &pos,
-                  const SUVector3D &norm, const SUPoint2D &uv);
+                  const SUVector3D &norm, const SUPoint2D &uv,
+                  const SUPoint2D *back_uv = nullptr);
 
   // Helper to load texture scales
   void cache_texture_scales();

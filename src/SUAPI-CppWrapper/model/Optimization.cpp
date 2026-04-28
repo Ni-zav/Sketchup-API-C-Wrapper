@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <map>
 #include <set>
 #include <tuple>
@@ -18,6 +19,66 @@
 #include <math.h>
 
 namespace CW {
+
+namespace {
+
+std::string json_escape(const std::string &value) {
+  std::string escaped;
+  escaped.reserve(value.size() + 4);
+  for (char ch : value) {
+    switch (ch) {
+    case '\\':
+      escaped += "\\\\";
+      break;
+    case '"':
+      escaped += "\\\"";
+      break;
+    case '\b':
+      escaped += "\\b";
+      break;
+    case '\f':
+      escaped += "\\f";
+      break;
+    case '\n':
+      escaped += "\\n";
+      break;
+    case '\r':
+      escaped += "\\r";
+      break;
+    case '\t':
+      escaped += "\\t";
+      break;
+    default:
+      escaped += ch;
+      break;
+    }
+  }
+  return escaped;
+}
+
+std::string material_bucket_name(const Material &material) {
+  return material.is_valid() ? material.name().std_string() : "SketchUp_Default";
+}
+
+bool material_has_texture(const Material &material) {
+  if (!material.is_valid()) {
+    return false;
+  }
+
+  try {
+    return material.texture().is_valid();
+  } catch (...) {
+    return false;
+  }
+}
+
+std::string encode_two_sided_material_key(const std::string &front_name,
+                                          const std::string &back_name) {
+  return "__TWO_SIDED__:[\"" + json_escape(front_name) + "\",\"" +
+         json_escape(back_name) + "\"]";
+}
+
+} // namespace
 
 HierarchyReducer::HierarchyReducer(Model &model) : m_model(model) {}
 
@@ -34,7 +95,7 @@ void HierarchyReducer::traverse(const CleanupOptions &options) {
 
   cache_texture_scales(); // Fix: Ensure texture scales are cached for UV
                           // calculation
-  process_entities(m_model.entities(), Transformation(), Material(), 0);
+  process_entities(m_model.entities(), Transformation(), Material(), options, 0);
 
   finalize(options);
 }
@@ -65,7 +126,7 @@ void HierarchyReducer::finalize(const CleanupOptions &options) {
 void HierarchyReducer::traverse_entities(const Entities &entities,
                                          const CleanupOptions &options) {
   cache_texture_scales();
-  process_entities(entities, Transformation(), Material(), 0);
+  process_entities(entities, Transformation(), Material(), options, 0);
 
   finalize(options);
 }
@@ -86,6 +147,7 @@ void HierarchyReducer::cache_texture_scales() {
 void HierarchyReducer::process_entities(const Entities &entities,
                                         const Transformation &transform,
                                         Material inherited_material,
+                                        const CleanupOptions &options,
                                         int depth) {
   if (depth > 100) {
     printf(
@@ -100,7 +162,7 @@ void HierarchyReducer::process_entities(const Entities &entities,
     Material mat = inst.material();
     Material active_mat = mat.is_valid() ? mat : inherited_material;
     process_entities(inst.definition().entities(), new_transform, active_mat,
-                     depth + 1);
+                     options, depth + 1);
   }
 
   std::vector<Group> groups = entities.groups();
@@ -109,17 +171,29 @@ void HierarchyReducer::process_entities(const Entities &entities,
     Transformation new_transform = transform * child_transform;
     Material mat = grp.material();
     Material active_mat = mat.is_valid() ? mat : inherited_material;
-    process_entities(grp.entities(), new_transform, active_mat, depth + 1);
+    process_entities(grp.entities(), new_transform, active_mat, options,
+                     depth + 1);
   }
 
   std::vector<Face> faces = entities.faces();
+  bool collection_has_direct_front_materials = false;
+  if (!options.two_sided_materials) {
+    collection_has_direct_front_materials = std::any_of(
+        faces.begin(), faces.end(), [](Face &face) {
+          return face.material().is_valid();
+        });
+  }
+
   for (auto &face : faces) {
-    process_face(face, transform, inherited_material);
+    process_face(face, transform, inherited_material, options,
+                 collection_has_direct_front_materials);
   }
 }
 
 void HierarchyReducer::process_face(Face &face, const Transformation &transform,
-                                    Material inherited_material) {
+                                    Material inherited_material,
+                                    const CleanupOptions &options,
+                                    bool collection_has_direct_front_materials) {
   Material front_mat = face.material();
   Material back_mat = face.back_material();
   bool has_front = front_mat.is_valid();
@@ -128,23 +202,47 @@ void HierarchyReducer::process_face(Face &face, const Transformation &transform,
   double det = transform.determinant();
   bool is_mirrored = (det < 0.0);
 
-  // Material selection logic: Direct Front > Inherited
-  // Matches unoptimized behavior (mesh_builder.py) by ignoring back materials.
   Material active_mat;
   bool use_front_side = true;
   bool is_direct = false;
+  Material effective_front_mat;
+  Material effective_back_mat;
+  std::string mat_name;
 
-  if (has_front) {
-    active_mat = front_mat;
-    is_direct = true;
+  if (options.two_sided_materials) {
+    effective_front_mat = has_front ? front_mat : inherited_material;
+    effective_back_mat = has_back ? back_mat : inherited_material;
+    mat_name = encode_two_sided_material_key(
+        material_bucket_name(effective_front_mat),
+        material_bucket_name(effective_back_mat));
   } else {
-    active_mat = inherited_material;
-    is_direct = false;
-  }
+    const bool front_has_texture = material_has_texture(front_mat);
+    const bool back_has_texture = material_has_texture(back_mat);
+    const std::string front_name = material_bucket_name(front_mat);
+    const std::string back_name = material_bucket_name(back_mat);
+    const bool front_is_default = !has_front || front_name == "SketchUp_Default";
+    const bool back_is_default = !has_back || back_name == "SketchUp_Default";
 
-  std::string mat_name = "SketchUp_Default";
-  if (active_mat.is_valid()) {
-    mat_name = active_mat.name().std_string();
+    if (front_has_texture && !back_has_texture) {
+      active_mat = front_mat;
+      is_direct = true;
+    } else if (back_has_texture && !front_has_texture) {
+      active_mat = back_mat;
+      use_front_side = false;
+      is_direct = true;
+    } else if (has_front && (!has_back || back_is_default || !front_is_default)) {
+      active_mat = front_mat;
+      is_direct = true;
+    } else if (has_back && (front_is_default || collection_has_direct_front_materials)) {
+      active_mat = back_mat;
+      use_front_side = false;
+      is_direct = true;
+    } else {
+      active_mat = inherited_material;
+      is_direct = false;
+    }
+
+    mat_name = material_bucket_name(active_mat);
   }
 
   if (m_buckets.find(mat_name) == m_buckets.end()) {
@@ -188,14 +286,47 @@ void HierarchyReducer::process_face(Face &face, const Transformation &transform,
     }
   }
 
+  double front_s_scale = 1.0;
+  double front_t_scale = 1.0;
+  if (options.two_sided_materials && !has_front && effective_front_mat.is_valid()) {
+    auto it_scale =
+        m_texture_scale_cache.find(material_bucket_name(effective_front_mat));
+    if (it_scale != m_texture_scale_cache.end()) {
+      front_s_scale = it_scale->second.first;
+      front_t_scale = it_scale->second.second;
+    }
+  }
+
+  double back_s_scale = 1.0;
+  double back_t_scale = 1.0;
+  if (options.two_sided_materials && !has_back && effective_back_mat.is_valid()) {
+    auto it_scale =
+        m_texture_scale_cache.find(material_bucket_name(effective_back_mat));
+    if (it_scale != m_texture_scale_cache.end()) {
+      back_s_scale = it_scale->second.first;
+      back_t_scale = it_scale->second.second;
+    }
+  }
+
   std::vector<SUPoint3D> stq(num_vertices);
   size_t stq_count = 0;
-  if (use_front_side) {
+  if (options.two_sided_materials || use_front_side) {
     SUMeshHelperGetFrontSTQCoords(mesh_ref, num_vertices, stq.data(),
                                   &stq_count);
   } else {
     SUMeshHelperGetBackSTQCoords(mesh_ref, num_vertices, stq.data(),
                                  &stq_count);
+  }
+
+  std::vector<SUPoint3D> back_stq;
+  if (options.two_sided_materials) {
+    back_stq.resize(num_vertices);
+    size_t back_stq_count = 0;
+    SUMeshHelperGetBackSTQCoords(mesh_ref, num_vertices, back_stq.data(),
+                                 &back_stq_count);
+    if (back_stq_count != num_vertices) {
+      std::fill(back_stq.begin(), back_stq.end(), SUPoint3D{0.0, 0.0, 1.0});
+    }
   }
 
   // If the transformation is mirrored, we must flip the winding to stay CCW in
@@ -241,10 +372,21 @@ void HierarchyReducer::process_face(Face &face, const Transformation &transform,
 
       double q = (stq[idx].z == 0.0) ? 1.0 : stq[idx].z;
       SUPoint2D uv_val;
-      uv_val.x = (stq[idx].x / q) * s_scale;
-      uv_val.y = (stq[idx].y / q) * t_scale;
+      if (options.two_sided_materials) {
+        uv_val.x = (stq[idx].x / q) * front_s_scale;
+        uv_val.y = (stq[idx].y / q) * front_t_scale;
 
-      add_vertex(mesh_buffer, p_trans_cw, n_trans, uv_val);
+        double back_q = (back_stq[idx].z == 0.0) ? 1.0 : back_stq[idx].z;
+        SUPoint2D back_uv_val;
+        back_uv_val.x = (back_stq[idx].x / back_q) * back_s_scale;
+        back_uv_val.y = (back_stq[idx].y / back_q) * back_t_scale;
+        add_vertex(mesh_buffer, p_trans_cw, n_trans, uv_val, &back_uv_val);
+      } else {
+        uv_val.x = (stq[idx].x / q) * s_scale;
+        uv_val.y = (stq[idx].y / q) * t_scale;
+
+        add_vertex(mesh_buffer, p_trans_cw, n_trans, uv_val);
+      }
     }
     mesh_buffer.face_sizes.push_back(3);
   }
@@ -253,7 +395,8 @@ void HierarchyReducer::process_face(Face &face, const Transformation &transform,
 }
 
 void HierarchyReducer::add_vertex(ReducedMesh &mesh, const SUPoint3D &pos,
-                                  const SUVector3D &norm, const SUPoint2D &uv) {
+                                  const SUVector3D &norm, const SUPoint2D &uv,
+                                  const SUPoint2D *back_uv) {
   int64_t kx = static_cast<int64_t>(std::round(pos.x * ReducedMesh::POS_SCALE));
   int64_t ky = static_cast<int64_t>(std::round(pos.y * ReducedMesh::POS_SCALE));
   int64_t kz = static_cast<int64_t>(std::round(pos.z * ReducedMesh::POS_SCALE));
@@ -268,8 +411,17 @@ void HierarchyReducer::add_vertex(ReducedMesh &mesh, const SUPoint3D &pos,
   int64_t ku = static_cast<int64_t>(std::round(uv.x * ReducedMesh::UV_SCALE));
   int64_t kv = static_cast<int64_t>(std::round(uv.y * ReducedMesh::UV_SCALE));
 
+  int64_t kbu = std::numeric_limits<int64_t>::min();
+  int64_t kbv = std::numeric_limits<int64_t>::min();
+  if (back_uv != nullptr) {
+  kbu = static_cast<int64_t>(
+    std::round(back_uv->x * ReducedMesh::UV_SCALE));
+  kbv = static_cast<int64_t>(
+    std::round(back_uv->y * ReducedMesh::UV_SCALE));
+  }
+
   ReducedMesh::VertexKey key =
-      std::make_tuple(kx, ky, kz, knx, kny, knz, ku, kv);
+    std::make_tuple(kx, ky, kz, knx, kny, knz, ku, kv, kbu, kbv);
 
   auto it = mesh.unique_map.find(key);
   if (it != mesh.unique_map.end()) {
@@ -279,6 +431,9 @@ void HierarchyReducer::add_vertex(ReducedMesh &mesh, const SUPoint3D &pos,
     mesh.vertices.push_back(pos);
     mesh.normals.push_back(norm);
     mesh.uvs.push_back(uv);
+    if (back_uv != nullptr) {
+      mesh.back_uvs.push_back(*back_uv);
+    }
     mesh.unique_map[key] = new_idx;
     mesh.indices.push_back(new_idx);
   }

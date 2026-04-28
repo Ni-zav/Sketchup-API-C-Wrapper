@@ -85,6 +85,7 @@ Material::Material(const Material &other)
     this->name(other.name());
     this->type(other.type());
     this->opacity(other.opacity());
+    this->use_alpha(other.use_alpha());
     this->color(other.color());
     Texture texture_copy = other.texture();
     this->texture(texture_copy);
@@ -106,6 +107,7 @@ Material &Material::operator=(const Material &other) {
     this->name(other.name());
     this->type(other.type());
     this->opacity(other.opacity());
+    this->use_alpha(other.use_alpha());
     this->color(other.color());
     Texture texture_copy = other.texture();
     this->texture(texture_copy);
@@ -143,6 +145,7 @@ Material Material::copy() const {
   new_material.name(this->name());
   new_material.type(this->type());
   new_material.opacity(this->opacity());
+  new_material.use_alpha(this->use_alpha());
   new_material.color(this->color());
   Texture temp_texture =
       this->texture().copy(); // TODO: there is a problem with texture scaling
@@ -232,7 +235,7 @@ void Material::opacity(const double alpha) {
   if (!(*this)) {
     throw std::logic_error("CW::Material::opacity(): Material is null");
   }
-  double input_alpha = 1.0;
+  double input_alpha = alpha;
   if (alpha > 1.0) {
     input_alpha = 1.0;
   } else if (alpha < 0.0) {
