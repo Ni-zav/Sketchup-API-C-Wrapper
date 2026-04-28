@@ -204,7 +204,7 @@ LoopInput& LoopInput::set_edge_smooth(const size_t edge_index, const bool smooth
   if(!(*this)) {
     throw std::logic_error("CW::LoopInput::set_edge_smooth(): LoopInput is null");
   }
-  SUResult res = SULoopInputEdgeSetSoft(m_loop_input, edge_index, smooth);
+  SUResult res = SULoopInputEdgeSetSmooth(m_loop_input, edge_index, smooth);
   if(res == SU_ERROR_OUT_OF_RANGE) {
     throw std::invalid_argument("CW::LoopInput::set_edge_smooth(): edge_index is larger than the number of vertices in the LoopInput");
   }
