@@ -373,17 +373,17 @@ void HierarchyReducer::process_face(Face &face, const Transformation &transform,
       double q = (stq[idx].z == 0.0) ? 1.0 : stq[idx].z;
       SUPoint2D uv_val;
       if (options.two_sided_materials) {
-        uv_val.x = (front_s_scale == 0.0) ? 0.0 : (stq[idx].x / q) / front_s_scale;
-        uv_val.y = (front_t_scale == 0.0) ? 0.0 : (stq[idx].y / q) / front_t_scale;
+        uv_val.x = (stq[idx].x / q) * front_s_scale;
+        uv_val.y = (stq[idx].y / q) * front_t_scale;
 
         double back_q = (back_stq[idx].z == 0.0) ? 1.0 : back_stq[idx].z;
         SUPoint2D back_uv_val;
-        back_uv_val.x = (back_s_scale == 0.0) ? 0.0 : (back_stq[idx].x / back_q) / back_s_scale;
-        back_uv_val.y = (back_t_scale == 0.0) ? 0.0 : (back_stq[idx].y / back_q) / back_t_scale;
+        back_uv_val.x = (back_stq[idx].x / back_q) * back_s_scale;
+        back_uv_val.y = (back_stq[idx].y / back_q) * back_t_scale;
         add_vertex(mesh_buffer, p_trans_cw, n_trans, uv_val, &back_uv_val);
       } else {
-        uv_val.x = (s_scale == 0.0) ? 0.0 : (stq[idx].x / q) / s_scale;
-        uv_val.y = (t_scale == 0.0) ? 0.0 : (stq[idx].y / q) / t_scale;
+        uv_val.x = (stq[idx].x / q) * s_scale;
+        uv_val.y = (stq[idx].y / q) * t_scale;
 
         add_vertex(mesh_buffer, p_trans_cw, n_trans, uv_val);
       }
@@ -476,6 +476,98 @@ double compute_face_area(const std::vector<int32_t> &loop,
   }
 
   return 0.5 * std::sqrt(ax * ax + ay * ay + az * az);
+}
+
+struct Point2D {
+  double x;
+  double y;
+};
+
+std::vector<Point2D> project_loop_to_2d(const std::vector<int32_t> &loop,
+                                        const std::vector<SUPoint3D> &vertices) {
+  std::vector<Point2D> projected;
+  projected.reserve(loop.size());
+
+  SUVector3D normal = compute_face_normal(loop, vertices);
+  double ax = std::fabs(normal.x);
+  double ay = std::fabs(normal.y);
+  double az = std::fabs(normal.z);
+
+  for (int32_t index : loop) {
+    const auto &point = vertices[index];
+    if (ax >= ay && ax >= az) {
+      projected.push_back({point.y, point.z});
+    } else if (ay >= ax && ay >= az) {
+      projected.push_back({point.x, point.z});
+    } else {
+      projected.push_back({point.x, point.y});
+    }
+  }
+
+  return projected;
+}
+
+double orient2d(const Point2D &a, const Point2D &b, const Point2D &c) {
+  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+bool on_segment(const Point2D &a, const Point2D &b, const Point2D &p) {
+  constexpr double kEps = 1e-9;
+  return p.x <= std::max(a.x, b.x) + kEps && p.x + kEps >= std::min(a.x, b.x) &&
+         p.y <= std::max(a.y, b.y) + kEps && p.y + kEps >= std::min(a.y, b.y);
+}
+
+bool segments_intersect(const Point2D &a1, const Point2D &a2,
+                        const Point2D &b1, const Point2D &b2) {
+  constexpr double kEps = 1e-9;
+  double o1 = orient2d(a1, a2, b1);
+  double o2 = orient2d(a1, a2, b2);
+  double o3 = orient2d(b1, b2, a1);
+  double o4 = orient2d(b1, b2, a2);
+
+  bool straddles_ab = (o1 > kEps && o2 < -kEps) || (o1 < -kEps && o2 > kEps);
+  bool straddles_cd = (o3 > kEps && o4 < -kEps) || (o3 < -kEps && o4 > kEps);
+  if (straddles_ab && straddles_cd)
+    return true;
+
+  if (std::fabs(o1) <= kEps && on_segment(a1, a2, b1))
+    return true;
+  if (std::fabs(o2) <= kEps && on_segment(a1, a2, b2))
+    return true;
+  if (std::fabs(o3) <= kEps && on_segment(b1, b2, a1))
+    return true;
+  if (std::fabs(o4) <= kEps && on_segment(b1, b2, a2))
+    return true;
+
+  return false;
+}
+
+bool is_simple_loop(const std::vector<int32_t> &loop,
+                    const std::vector<SUPoint3D> &vertices) {
+  if (loop.size() < 3)
+    return false;
+
+  std::vector<Point2D> projected = project_loop_to_2d(loop, vertices);
+  size_t count = projected.size();
+  for (size_t i = 0; i < count; ++i) {
+    size_t i_next = (i + 1) % count;
+    for (size_t j = i + 1; j < count; ++j) {
+      size_t j_next = (j + 1) % count;
+      if (i == j || i_next == j || j_next == i)
+        continue;
+      if (i == 0 && j_next == count - 1)
+        continue;
+      if (j == 0 && i_next == count - 1)
+        continue;
+
+      if (segments_intersect(projected[i], projected[i_next], projected[j],
+                             projected[j_next])) {
+        return false;
+      }
+    }
+  }
+
+  return true;
 }
 
 void HierarchyReducer::apply_mesh_cleanup(ReducedMesh &mesh,
@@ -675,6 +767,10 @@ void HierarchyReducer::apply_mesh_cleanup(ReducedMesh &mesh,
             double area_tolerance = std::max(1e-10, source_area * 1e-6);
             if (std::fabs(merged_area - source_area) > area_tolerance) {
               continue; // Reject merges that would change area/topology and can create holes.
+            }
+
+            if (!is_simple_loop(new_loop, mesh.vertices)) {
+              continue; // Reject self-intersecting merged loops.
             }
 
             if (new_loop.size() >= 3) {
