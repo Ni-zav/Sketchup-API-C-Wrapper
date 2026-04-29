@@ -373,17 +373,17 @@ void HierarchyReducer::process_face(Face &face, const Transformation &transform,
       double q = (stq[idx].z == 0.0) ? 1.0 : stq[idx].z;
       SUPoint2D uv_val;
       if (options.two_sided_materials) {
-        uv_val.x = (stq[idx].x / q) * front_s_scale;
-        uv_val.y = (stq[idx].y / q) * front_t_scale;
+        uv_val.x = (front_s_scale == 0.0) ? 0.0 : (stq[idx].x / q) / front_s_scale;
+        uv_val.y = (front_t_scale == 0.0) ? 0.0 : (stq[idx].y / q) / front_t_scale;
 
         double back_q = (back_stq[idx].z == 0.0) ? 1.0 : back_stq[idx].z;
         SUPoint2D back_uv_val;
-        back_uv_val.x = (back_stq[idx].x / back_q) * back_s_scale;
-        back_uv_val.y = (back_stq[idx].y / back_q) * back_t_scale;
+        back_uv_val.x = (back_s_scale == 0.0) ? 0.0 : (back_stq[idx].x / back_q) / back_s_scale;
+        back_uv_val.y = (back_t_scale == 0.0) ? 0.0 : (back_stq[idx].y / back_q) / back_t_scale;
         add_vertex(mesh_buffer, p_trans_cw, n_trans, uv_val, &back_uv_val);
       } else {
-        uv_val.x = (stq[idx].x / q) * s_scale;
-        uv_val.y = (stq[idx].y / q) * t_scale;
+        uv_val.x = (s_scale == 0.0) ? 0.0 : (stq[idx].x / q) / s_scale;
+        uv_val.y = (t_scale == 0.0) ? 0.0 : (stq[idx].y / q) / t_scale;
 
         add_vertex(mesh_buffer, p_trans_cw, n_trans, uv_val);
       }
@@ -459,6 +459,23 @@ SUVector3D compute_face_normal(const std::vector<int32_t> &loop,
   if (len < 1e-12)
     return {0.0, 0.0, 1.0};
   return {nx / len, ny / len, nz / len};
+}
+
+double compute_face_area(const std::vector<int32_t> &loop,
+                         const std::vector<SUPoint3D> &vertices) {
+  if (loop.size() < 3)
+    return 0.0;
+
+  double ax = 0.0, ay = 0.0, az = 0.0;
+  for (size_t i = 0; i < loop.size(); ++i) {
+    const auto &curr = vertices[loop[i]];
+    const auto &next = vertices[loop[(i + 1) % loop.size()]];
+    ax += curr.y * next.z - curr.z * next.y;
+    ay += curr.z * next.x - curr.x * next.z;
+    az += curr.x * next.y - curr.y * next.x;
+  }
+
+  return 0.5 * std::sqrt(ax * ax + ay * ay + az * az);
 }
 
 void HierarchyReducer::apply_mesh_cleanup(ReducedMesh &mesh,
@@ -651,6 +668,14 @@ void HierarchyReducer::apply_mesh_cleanup(ReducedMesh &mesh,
             }
 
             clean_collinear(new_loop);
+
+            double source_area = compute_face_area(active_faces[f1], mesh.vertices) +
+                                 compute_face_area(active_faces[f2], mesh.vertices);
+            double merged_area = compute_face_area(new_loop, mesh.vertices);
+            double area_tolerance = std::max(1e-10, source_area * 1e-6);
+            if (std::fabs(merged_area - source_area) > area_tolerance) {
+              continue; // Reject merges that would change area/topology and can create holes.
+            }
 
             if (new_loop.size() >= 3) {
               active_faces[f1] = std::move(new_loop);
