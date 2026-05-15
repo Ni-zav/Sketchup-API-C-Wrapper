@@ -43,6 +43,15 @@
 #endif
 
 namespace CW {
+
+namespace {
+
+double to_su_dimension_value(double scale) {
+  return scale == 0.0 ? 0.0 : 1.0 / scale;
+}
+
+}  // namespace
+
 /******************************
 ** Private Static Methods *****
 *******************************/
@@ -70,16 +79,18 @@ SUTextureRef Texture::create_texture(ImageRep &image_rep) {
 SUTextureRef Texture::create_texture(const std::string file_path,
                                      double s_scale, double t_scale) {
   SUTextureRef texture = SU_INVALID;
-  SUResult res =
-      SUTextureCreateFromFile(&texture, file_path.c_str(), s_scale, t_scale);
+  SUResult res = SUTextureCreateFromFile(&texture, file_path.c_str(),
+                                         to_su_dimension_value(s_scale),
+                                         to_su_dimension_value(t_scale));
   if (res != SU_ERROR_NONE) {
     return SU_INVALID;
   }
-// TODO: At time of writing, SUTextureCreateFromFile is broken - it does not set
-// the s_scale and t_scale values.  In SU2025 and over, we can use
-// SUTextureSetDimensions to set these values after creation.
+// The SketchUp C API uses inverse dimension semantics here relative to the
+// scale values returned by SUTextureGetDimensions / Texture::s_scale(). Keep
+// the wrapper on true scale semantics and invert only at the API boundary.
 #if (SketchUpAPI_VERSION_MAJOR >= 2025)
-  res = SUTextureSetDimensions(texture, s_scale, t_scale);
+  res = SUTextureSetDimensions(texture, to_su_dimension_value(s_scale),
+                               to_su_dimension_value(t_scale));
   if (res != SU_ERROR_NONE) {
     return SU_INVALID;
   }
@@ -172,11 +183,7 @@ Texture Texture::copy() const {
   ImageRep image_rep = this->image_rep().copy();
   Texture copied_texture(image_rep);
   copied_texture.file_name(this->file_name());
-  // Texture::set_dimensions uses inverse of scale values - weird but true.  SO
-  // we have to invert the values here.
-  double si_scale = 1.0 / this->s_scale();
-  double ti_scale = 1.0 / this->t_scale();
-  copied_texture.set_dimensions(si_scale, ti_scale);
+  copied_texture.set_dimensions(this->s_scale(), this->t_scale());
   return copied_texture;
 #else
   // For earlier versions we have to use the workaround method below.
@@ -315,7 +322,9 @@ void Texture::set_dimensions(double s_scale, double t_scale) {
   if (!(*this)) {
     throw std::logic_error("CW::Texture::set_dimensions(): Texture is null");
   }
-  SUResult res = SUTextureSetDimensions(this->ref(), s_scale, t_scale);
+  SUResult res = SUTextureSetDimensions(this->ref(),
+                                        to_su_dimension_value(s_scale),
+                                        to_su_dimension_value(t_scale));
   assert(res == SU_ERROR_NONE);
   _unused(res);
   return;
