@@ -6,6 +6,7 @@
 #include <SketchUpAPI/geometry.h>
 #include <SketchUpAPI/model/face.h>
 #include <SketchUpAPI/model/mesh_helper.h>
+#include <SketchUpAPI/model/texture_writer.h>
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -250,8 +251,24 @@ void HierarchyReducer::process_face(Face &face, const Transformation &transform,
   }
   ReducedMesh &mesh_buffer = m_buckets[mat_name];
 
+  SUTextureWriterRef texture_writer = SU_INVALID;
+  SUTextureWriterCreate(&texture_writer);
+  long front_texture_id = 0;
+  long back_texture_id = 0;
+  SUTextureWriterLoadFace(texture_writer, face.ref(), &front_texture_id,
+                          &back_texture_id);
+
   SUMeshHelperRef mesh_ref = SU_INVALID;
-  SUMeshHelperCreate(&mesh_ref, face.ref());
+  SUResult mesh_result =
+      SUMeshHelperCreateWithTextureWriter(&mesh_ref, face.ref(), texture_writer);
+  if (mesh_result != SU_ERROR_NONE) {
+    mesh_ref = SU_INVALID;
+    mesh_result = SUMeshHelperCreate(&mesh_ref, face.ref());
+  }
+  if (mesh_result != SU_ERROR_NONE) {
+    SUTextureWriterRelease(&texture_writer);
+    return;
+  }
 
   size_t num_vertices = 0;
   SUMeshHelperGetNumVertices(mesh_ref, &num_vertices);
@@ -260,6 +277,7 @@ void HierarchyReducer::process_face(Face &face, const Transformation &transform,
 
   if (num_vertices == 0 || num_triangles == 0) {
     SUMeshHelperRelease(&mesh_ref);
+    SUTextureWriterRelease(&texture_writer);
     return;
   }
 
@@ -392,6 +410,7 @@ void HierarchyReducer::process_face(Face &face, const Transformation &transform,
   }
 
   SUMeshHelperRelease(&mesh_ref);
+  SUTextureWriterRelease(&texture_writer);
 }
 
 void HierarchyReducer::add_vertex(ReducedMesh &mesh, const SUPoint3D &pos,
