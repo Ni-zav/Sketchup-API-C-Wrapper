@@ -6,7 +6,6 @@
 #include <SketchUpAPI/geometry.h>
 #include <SketchUpAPI/model/face.h>
 #include <SketchUpAPI/model/mesh_helper.h>
-#include <SketchUpAPI/model/texture_writer.h>
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -202,6 +201,9 @@ void HierarchyReducer::process_face(Face &face, const Transformation &transform,
 
   double det = transform.determinant();
   bool is_mirrored = (det < 0.0);
+  const bool has_inverse_transform = std::abs(det) > 1e-12;
+  const Transformation inverse_transform =
+      has_inverse_transform ? transform.inverse() : Transformation();
 
   Material active_mat;
   bool use_front_side = true;
@@ -251,22 +253,9 @@ void HierarchyReducer::process_face(Face &face, const Transformation &transform,
   }
   ReducedMesh &mesh_buffer = m_buckets[mat_name];
 
-  SUTextureWriterRef texture_writer = SU_INVALID;
-  SUTextureWriterCreate(&texture_writer);
-  long front_texture_id = 0;
-  long back_texture_id = 0;
-  SUTextureWriterLoadFace(texture_writer, face.ref(), &front_texture_id,
-                          &back_texture_id);
-
   SUMeshHelperRef mesh_ref = SU_INVALID;
-  SUResult mesh_result =
-      SUMeshHelperCreateWithTextureWriter(&mesh_ref, face.ref(), texture_writer);
+  SUResult mesh_result = SUMeshHelperCreate(&mesh_ref, face.ref());
   if (mesh_result != SU_ERROR_NONE) {
-    mesh_ref = SU_INVALID;
-    mesh_result = SUMeshHelperCreate(&mesh_ref, face.ref());
-  }
-  if (mesh_result != SU_ERROR_NONE) {
-    SUTextureWriterRelease(&texture_writer);
     return;
   }
 
@@ -277,7 +266,6 @@ void HierarchyReducer::process_face(Face &face, const Transformation &transform,
 
   if (num_vertices == 0 || num_triangles == 0) {
     SUMeshHelperRelease(&mesh_ref);
-    SUTextureWriterRelease(&texture_writer);
     return;
   }
 
@@ -375,7 +363,21 @@ void HierarchyReducer::process_face(Face &face, const Transformation &transform,
 
       // Transform normal. Normals are direction vectors, they don't get scaled
       // by INCH_TO_METER but do get transformed.
-      SUVector3D n_trans = transform * CW::Vector3D(norms[idx]);
+      SUVector3D n_trans;
+      if (has_inverse_transform) {
+        n_trans = {
+            inverse_transform[0] * norms[idx].x +
+                inverse_transform[1] * norms[idx].y +
+                inverse_transform[2] * norms[idx].z,
+            inverse_transform[4] * norms[idx].x +
+                inverse_transform[5] * norms[idx].y +
+                inverse_transform[6] * norms[idx].z,
+            inverse_transform[8] * norms[idx].x +
+                inverse_transform[9] * norms[idx].y +
+                inverse_transform[10] * norms[idx].z};
+      } else {
+        n_trans = transform * CW::Vector3D(norms[idx]);
+      }
 
       double len_sq =
           n_trans.x * n_trans.x + n_trans.y * n_trans.y + n_trans.z * n_trans.z;
@@ -410,7 +412,6 @@ void HierarchyReducer::process_face(Face &face, const Transformation &transform,
   }
 
   SUMeshHelperRelease(&mesh_ref);
-  SUTextureWriterRelease(&texture_writer);
 }
 
 void HierarchyReducer::add_vertex(ReducedMesh &mesh, const SUPoint3D &pos,
