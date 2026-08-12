@@ -219,31 +219,11 @@ void HierarchyReducer::process_face(Face &face, const Transformation &transform,
         material_bucket_name(effective_front_mat),
         material_bucket_name(effective_back_mat));
   } else {
-    const bool front_has_texture = material_has_texture(front_mat);
-    const bool back_has_texture = material_has_texture(back_mat);
-    const std::string front_name = material_bucket_name(front_mat);
-    const std::string back_name = material_bucket_name(back_mat);
-    const bool front_is_default = !has_front || front_name == "SketchUp_Default";
-    const bool back_is_default = !has_back || back_name == "SketchUp_Default";
-
-    if (front_has_texture && !back_has_texture) {
-      active_mat = front_mat;
-      is_direct = true;
-    } else if (back_has_texture && !front_has_texture) {
-      active_mat = back_mat;
-      use_front_side = false;
-      is_direct = true;
-    } else if (has_front && (!has_back || back_is_default || !front_is_default)) {
-      active_mat = front_mat;
-      is_direct = true;
-    } else if (has_back && (front_is_default || collection_has_direct_front_materials)) {
-      active_mat = back_mat;
-      use_front_side = false;
-      is_direct = true;
-    } else {
-      active_mat = inherited_material;
-      is_direct = false;
-    }
+    // One-sided import is deliberately front-only.  A differing SketchUp
+    // back material is ignored; if no front material is assigned, inherit
+    // the containing group's material (or the SketchUp default).
+    active_mat = has_front ? front_mat : inherited_material;
+    is_direct = has_front;
 
     mat_name = material_bucket_name(active_mat);
   }
