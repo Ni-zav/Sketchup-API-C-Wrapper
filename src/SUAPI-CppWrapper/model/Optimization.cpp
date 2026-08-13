@@ -5,6 +5,8 @@
 #include "SUAPI-CppWrapper/model/Group.hpp"
 #include <SketchUpAPI/geometry.h>
 #include <SketchUpAPI/model/face.h>
+#include <SketchUpAPI/model/layer.h>
+#include <SketchUpAPI/model/layer_folder.h>
 #include <SketchUpAPI/model/mesh_helper.h>
 #include <algorithm>
 #include <cmath>
@@ -78,6 +80,73 @@ std::string encode_two_sided_material_key(const std::string &front_name,
          json_escape(back_name) + "\"]";
 }
 
+bool contains_id(const std::vector<int32_t> &ids, int32_t id) {
+  return std::find(ids.begin(), ids.end(), id) != ids.end();
+}
+
+bool layer_visible(const Layer &layer, const CleanupOptions &options) {
+  if (!layer.is_valid()) {
+    return true;
+  }
+
+  bool tag_visible = true;
+  if (SULayerGetVisibility(layer.ref(), &tag_visible) != SU_ERROR_NONE) {
+    tag_visible = true;
+  }
+  if (options.use_scene_hidden_layers &&
+      contains_id(options.layer_override_ids, layer.entityID())) {
+    tag_visible = !tag_visible;
+  }
+  if (!tag_visible) {
+    return false;
+  }
+
+  SULayerFolderRef folder = SU_INVALID;
+  SUResult result = SULayerGetParentLayerFolder(layer.ref(), &folder);
+  while (result == SU_ERROR_NONE && SUIsValid(folder)) {
+    bool folder_visible = true;
+    if (SULayerFolderGetVisibility(folder, &folder_visible) == SU_ERROR_NONE &&
+        !folder_visible) {
+      return false;
+    }
+
+    int32_t folder_id = 0;
+    const SUEntityRef folder_entity = SULayerFolderToEntity(folder);
+    if (options.use_scene_hidden_layers &&
+        SUEntityGetID(folder_entity, &folder_id) == SU_ERROR_NONE &&
+        contains_id(options.hidden_layer_folder_ids, folder_id)) {
+      return false;
+    }
+
+    SULayerFolderRef parent = SU_INVALID;
+    result = SULayerFolderGetParentLayerFolder(folder, &parent);
+    folder = parent;
+  }
+  return result == SU_ERROR_NONE || result == SU_ERROR_NO_DATA;
+}
+
+bool drawing_element_visible(const DrawingElement &element,
+                             const CleanupOptions &options) {
+  bool hidden = false;
+  if (options.use_scene_hidden_objects) {
+    hidden = contains_id(options.hidden_entity_ids, element.entityID());
+  } else {
+    hidden = element.hidden();
+  }
+  return !hidden && layer_visible(element.layer(), options);
+}
+
+bool include_for_visibility(bool effective_visible,
+                            const CleanupOptions &options) {
+  if (options.visibility_filter == 1) {
+    return effective_visible;
+  }
+  if (options.visibility_filter == 2) {
+    return !effective_visible;
+  }
+  return true;
+}
+
 } // namespace
 
 HierarchyReducer::HierarchyReducer(Model &model) : m_model(model) {}
@@ -95,7 +164,8 @@ void HierarchyReducer::traverse(const CleanupOptions &options) {
 
   cache_texture_scales(); // Fix: Ensure texture scales are cached for UV
                           // calculation
-  process_entities(m_model.entities(), Transformation(), Material(), options, 0);
+  process_entities(m_model.entities(), Transformation(), Material(), options, 0,
+                   true);
 
   finalize(options);
 }
@@ -126,7 +196,7 @@ void HierarchyReducer::finalize(const CleanupOptions &options) {
 void HierarchyReducer::traverse_entities(const Entities &entities,
                                          const CleanupOptions &options) {
   cache_texture_scales();
-  process_entities(entities, Transformation(), Material(), options, 0);
+  process_entities(entities, Transformation(), Material(), options, 0, true);
 
   finalize(options);
 }
@@ -148,7 +218,8 @@ void HierarchyReducer::process_entities(const Entities &entities,
                                         const Transformation &transform,
                                         Material inherited_material,
                                         const CleanupOptions &options,
-                                        int depth) {
+                                        int depth,
+                                        bool ancestor_visible) {
   if (depth > 100) {
     printf(
         "C++: Warning: Max recursion depth (100) reached. Aborting branch.\n");
@@ -161,8 +232,10 @@ void HierarchyReducer::process_entities(const Entities &entities,
     Transformation new_transform = transform * child_transform;
     Material mat = inst.material();
     Material active_mat = mat.is_valid() ? mat : inherited_material;
+    const bool child_visible =
+        ancestor_visible && drawing_element_visible(inst, options);
     process_entities(inst.definition().entities(), new_transform, active_mat,
-                     options, depth + 1);
+                     options, depth + 1, child_visible);
   }
 
   std::vector<Group> groups = entities.groups();
@@ -171,8 +244,10 @@ void HierarchyReducer::process_entities(const Entities &entities,
     Transformation new_transform = transform * child_transform;
     Material mat = grp.material();
     Material active_mat = mat.is_valid() ? mat : inherited_material;
+    const bool child_visible =
+        ancestor_visible && drawing_element_visible(grp, options);
     process_entities(grp.entities(), new_transform, active_mat, options,
-                     depth + 1);
+                     depth + 1, child_visible);
   }
 
   std::vector<Face> faces = entities.faces();
@@ -186,14 +261,20 @@ void HierarchyReducer::process_entities(const Entities &entities,
 
   for (auto &face : faces) {
     process_face(face, transform, inherited_material, options,
-                 collection_has_direct_front_materials);
+                 collection_has_direct_front_materials, ancestor_visible);
   }
 }
 
 void HierarchyReducer::process_face(Face &face, const Transformation &transform,
                                     Material inherited_material,
                                     const CleanupOptions &options,
-                                    bool collection_has_direct_front_materials) {
+                                    bool collection_has_direct_front_materials,
+                                    bool ancestor_visible) {
+  const bool effective_visible =
+      ancestor_visible && drawing_element_visible(face, options);
+  if (!include_for_visibility(effective_visible, options)) {
+    return;
+  }
   Material front_mat = face.material();
   Material back_mat = face.back_material();
   bool has_front = front_mat.is_valid();

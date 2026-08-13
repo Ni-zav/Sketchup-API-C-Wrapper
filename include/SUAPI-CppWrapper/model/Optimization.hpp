@@ -68,6 +68,14 @@ struct CleanupOptions {
   bool two_sided_materials = false;
   double angle_limit_radians = 0.0872665; // ~5 degrees
   double unit_scale = 0.0254;             // Inch to Meter by default
+  // 0 imports all geometry, 1 only effectively visible geometry, and 2 only
+  // effectively hidden geometry.
+  int visibility_filter = 0;
+  bool use_scene_hidden_objects = false;
+  bool use_scene_hidden_layers = false;
+  std::vector<int32_t> hidden_entity_ids;
+  std::vector<int32_t> layer_override_ids;
+  std::vector<int32_t> hidden_layer_folder_ids;
 };
 
 class HierarchyReducer {
@@ -95,11 +103,13 @@ private:
   void process_entities(const Entities &entities,
                         const Transformation &transform,
                         Material inherited_material,
-                        const CleanupOptions &options, int depth);
+                        const CleanupOptions &options, int depth,
+                        bool ancestor_visible);
   void process_face(Face &face, const Transformation &transform,
                     Material inherited_material,
                     const CleanupOptions &options,
-                    bool collection_has_direct_front_materials);
+                    bool collection_has_direct_front_materials,
+                    bool ancestor_visible);
 
   // Helper to add vertex with welding
   void add_vertex(ReducedMesh &mesh, const SUPoint3D &pos,
