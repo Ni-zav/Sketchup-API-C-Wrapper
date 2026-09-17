@@ -143,8 +143,11 @@ void process_face(const FaceEntry &entry, const Transformation &world,
         world * CW::Point3D(geometry->vertices[i]);
     const SUVector3D normal = transformed_normal(
         geometry->normals[i], world, inverse, has_inverse);
-    const SUPoint2D front_uv =
-        scaled_uv(geometry->front_stq[i], front_s, front_t);
+    const SUPoint3D &single_stq =
+        (!front.valid && back.valid && geometry->has_back_stq)
+            ? geometry->back_stq[i]
+            : geometry->front_stq[i];
+    const SUPoint2D front_uv = scaled_uv(single_stq, front_s, front_t);
 
     if (options.two_sided_materials) {
       const SUPoint2D back_uv =
