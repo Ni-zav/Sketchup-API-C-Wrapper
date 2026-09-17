@@ -10,15 +10,12 @@
 #include "SUAPI-CppWrapper/model/Layer.hpp"
 #include "SUAPI-CppWrapper/model/Model.hpp"
 #include "SUAPI-CppWrapper/model/Optimization.hpp"
+#include "SUAPI-CppWrapper/model/TraversalVisibilityV2.hpp"
 #include "SUAPI-CppWrapper/model/Vertex.hpp"
-
-#include <SketchUpAPI/model/layer.h>
-#include <SketchUpAPI/model/layer_folder.h>
 
 #include <cstdint>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -53,7 +50,7 @@ struct LooseEdgeStatsV2 {
 // Native standalone-edge collector with the same effective-visibility inputs as
 // HierarchyReducerV2. Source edge endpoints and metadata are cached per unique
 // definition; repeated occurrences only apply the accumulated transform and
-// visibility state.
+// shared TraversalVisibilityV2 state.
 class LooseEdgeBatchV2 {
 public:
   explicit LooseEdgeBatchV2(Model &model) : m_model(model) {}
@@ -76,7 +73,16 @@ public:
   const std::vector<LooseEdgeRecordV2> &hidden_edges() const {
     return m_hidden_edges;
   }
-  const LooseEdgeStatsV2 &stats() const { return m_stats; }
+
+  LooseEdgeStatsV2 stats() const {
+    LooseEdgeStatsV2 result = m_stats;
+    const TraversalVisibilityStatsV2 &visibility_stats = m_visibility.stats();
+    result.layer_visibility_cache_hits =
+        visibility_stats.layer_visibility_cache_hits;
+    result.layer_visibility_cache_misses =
+        visibility_stats.layer_visibility_cache_misses;
+    return result;
+  }
 
   void reset_geometry_cache() { m_definition_cache.clear(); }
 
@@ -123,32 +129,16 @@ private:
   std::vector<LooseEdgeRecordV2> m_edges;
   std::vector<LooseEdgeRecordV2> m_hidden_edges;
   std::unordered_map<std::int32_t, LevelPrototype> m_definition_cache;
-  std::unordered_set<std::int32_t> m_hidden_entity_ids;
-  std::unordered_set<std::int32_t> m_layer_override_ids;
-  std::unordered_set<std::int32_t> m_hidden_layer_folder_ids;
-  std::unordered_map<std::int32_t, bool> m_layer_visibility_cache;
+  TraversalVisibilityV2 m_visibility;
   LooseEdgeStatsV2 m_stats;
   bool m_partition_output = false;
 
   void begin_run(const CleanupOptions &options, bool partition_output) {
     m_edges.clear();
     m_hidden_edges.clear();
-    m_hidden_entity_ids.clear();
-    m_layer_override_ids.clear();
-    m_hidden_layer_folder_ids.clear();
-    m_layer_visibility_cache.clear();
     m_stats = LooseEdgeStatsV2();
     m_partition_output = partition_output;
-
-    m_hidden_entity_ids.reserve(options.hidden_entity_ids.size());
-    m_hidden_entity_ids.insert(options.hidden_entity_ids.begin(),
-                               options.hidden_entity_ids.end());
-    m_layer_override_ids.reserve(options.layer_override_ids.size());
-    m_layer_override_ids.insert(options.layer_override_ids.begin(),
-                                options.layer_override_ids.end());
-    m_hidden_layer_folder_ids.reserve(options.hidden_layer_folder_ids.size());
-    m_hidden_layer_folder_ids.insert(options.hidden_layer_folder_ids.begin(),
-                                     options.hidden_layer_folder_ids.end());
+    m_visibility.reset(options);
   }
 
   static std::string layer_name(const Layer &layer) {
@@ -234,70 +224,6 @@ private:
     return inserted.first->second;
   }
 
-  bool layer_visible(const Layer &layer, const CleanupOptions &options) {
-    if (!layer.is_valid())
-      return true;
-
-    const std::int32_t layer_id = static_cast<std::int32_t>(layer.entityID());
-    const auto cached = m_layer_visibility_cache.find(layer_id);
-    if (cached != m_layer_visibility_cache.end()) {
-      ++m_stats.layer_visibility_cache_hits;
-      return cached->second;
-    }
-    ++m_stats.layer_visibility_cache_misses;
-
-    bool visible = true;
-    if (SULayerGetVisibility(layer.ref(), &visible) != SU_ERROR_NONE)
-      visible = true;
-
-    if (options.use_scene_hidden_layers &&
-        m_layer_override_ids.find(layer_id) != m_layer_override_ids.end()) {
-      visible = !visible;
-    }
-
-    if (visible) {
-      SULayerFolderRef folder = SU_INVALID;
-      SUResult result = SULayerGetParentLayerFolder(layer.ref(), &folder);
-      int guard = 0;
-      while (result == SU_ERROR_NONE && SUIsValid(folder) && guard++ < 128) {
-        bool folder_visible = true;
-        if (SULayerFolderGetVisibility(folder, &folder_visible) == SU_ERROR_NONE &&
-            !folder_visible) {
-          visible = false;
-          break;
-        }
-
-        if (options.use_scene_hidden_layers) {
-          std::int32_t folder_id = 0;
-          const SUEntityRef folder_entity = SULayerFolderToEntity(folder);
-          if (SUEntityGetID(folder_entity, &folder_id) == SU_ERROR_NONE &&
-              m_hidden_layer_folder_ids.find(folder_id) !=
-                  m_hidden_layer_folder_ids.end()) {
-            visible = false;
-            break;
-          }
-        }
-
-        SULayerFolderRef parent = SU_INVALID;
-        result = SULayerFolderGetParentLayerFolder(folder, &parent);
-        folder = parent;
-      }
-    }
-
-    m_layer_visibility_cache.emplace(layer_id, visible);
-    return visible;
-  }
-
-  bool drawing_element_visible(std::int32_t entity_id, bool raw_hidden,
-                               const Layer &layer,
-                               const CleanupOptions &options) {
-    const bool hidden =
-        options.use_scene_hidden_objects
-            ? (m_hidden_entity_ids.find(entity_id) != m_hidden_entity_ids.end())
-            : raw_hidden;
-    return !hidden && layer_visible(layer, options);
-  }
-
   bool include_for_visibility(bool effective_visible,
                               const CleanupOptions &options) const {
     if (m_partition_output)
@@ -336,9 +262,8 @@ private:
     for (const auto &entry : level.edges) {
       ++m_stats.edges_seen;
       const bool effective_visible =
-          ancestor_visible && drawing_element_visible(
-                                  entry.entity_id, entry.raw_hidden, entry.layer,
-                                  options);
+          ancestor_visible && m_visibility.drawing_element_visible(
+                                  entry.entity_id, entry.raw_hidden, entry.layer);
       if (!include_for_visibility(effective_visible, options)) {
         ++m_stats.edges_visibility_skipped;
         continue;
@@ -361,10 +286,9 @@ private:
 
     for (const auto &entry : level.groups) {
       ++m_stats.groups;
-      const bool visible = ancestor_visible && drawing_element_visible(
-                                                   entry.entity_id,
-                                                   entry.raw_hidden,
-                                                   entry.layer, options);
+      const bool visible = ancestor_visible &&
+                           m_visibility.drawing_element_visible(
+                               entry.entity_id, entry.raw_hidden, entry.layer);
       const Transformation child_world = world * entry.local_transform;
       const LevelPrototype &child =
           definition_level(entry.definition_id, entry.child_entities);
@@ -375,10 +299,9 @@ private:
 
     for (const auto &entry : level.instances) {
       ++m_stats.instances;
-      const bool visible = ancestor_visible && drawing_element_visible(
-                                                   entry.entity_id,
-                                                   entry.raw_hidden,
-                                                   entry.layer, options);
+      const bool visible = ancestor_visible &&
+                           m_visibility.drawing_element_visible(
+                               entry.entity_id, entry.raw_hidden, entry.layer);
       const Transformation child_world = world * entry.local_transform;
       const LevelPrototype &child =
           definition_level(entry.definition_id, entry.child_entities);
