@@ -19,6 +19,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -32,6 +33,8 @@ namespace CW {
 // time alone.
 struct ReducerStatsV2 {
   std::uint64_t entity_levels = 0;
+  std::uint64_t root_cache_hits = 0;
+  std::uint64_t root_cache_misses = 0;
   std::uint64_t definition_cache_hits = 0;
   std::uint64_t definition_cache_misses = 0;
   std::uint64_t instances = 0;
@@ -46,6 +49,7 @@ struct ReducerStatsV2 {
   std::uint64_t triangles_emitted = 0;
   std::uint64_t layer_visibility_cache_hits = 0;
   std::uint64_t layer_visibility_cache_misses = 0;
+  std::uint64_t material_scale_cache_builds = 0;
   bool used_legacy_cleanup_fallback = false;
 };
 
@@ -73,9 +77,8 @@ public:
     }
 
     begin_run(options, false);
-    const EntityLevelPrototype root = build_level(m_model.entities());
-    process_level(root, Transformation(), default_material_state(), options, 0,
-                  true);
+    process_level(root_level(), Transformation(), default_material_state(),
+                  options, 0, true);
   }
 
   void traverse_entities(const Entities &entities,
@@ -106,9 +109,8 @@ public:
     }
 
     begin_run(options, true);
-    const EntityLevelPrototype root = build_level(m_model.entities());
-    process_level(root, Transformation(), default_material_state(), options, 0,
-                  true);
+    process_level(root_level(), Transformation(), default_material_state(),
+                  options, 0, true);
   }
 
   const std::map<std::string, ReducedMesh> &get_reduced_geometry() const {
@@ -122,12 +124,15 @@ public:
 
   const ReducerStatsV2 &stats() const { return m_stats; }
 
-  // Definition and tessellation caches intentionally survive normal traversals
-  // so different visibility passes on the same read-only model can reuse SDK
-  // extraction. Explicitly clear them after any model mutation.
+  // Definition/tessellation/root/material caches intentionally survive normal
+  // traversals so different visibility passes on the same read-only model can
+  // reuse SDK extraction. Explicitly clear them after any model mutation.
   void reset_geometry_cache() {
+    m_root_cache.reset();
     m_definition_cache.clear();
     m_face_cache.clear();
+    m_texture_scale_cache.clear();
+    m_texture_scale_cache_ready = false;
   }
 
 private:
@@ -180,16 +185,19 @@ private:
     std::vector<SUPoint3D> back_stq;
     MaterialState front_material;
     MaterialState back_material;
+    bool valid = false;
     bool has_back_stq = false;
   };
 
   Model &m_model;
   std::map<std::string, ReducedMesh> m_buckets;
   std::map<std::string, ReducedMesh> m_hidden_buckets;
+  std::optional<EntityLevelPrototype> m_root_cache;
   std::unordered_map<std::int32_t, EntityLevelPrototype> m_definition_cache;
   std::unordered_map<std::uint64_t, CachedFaceGeometry> m_face_cache;
   std::unordered_map<std::string, std::pair<double, double>>
       m_texture_scale_cache;
+  bool m_texture_scale_cache_ready = false;
   std::unordered_set<std::int32_t> m_hidden_entity_ids;
   std::unordered_set<std::int32_t> m_layer_override_ids;
   std::unordered_set<std::int32_t> m_hidden_layer_folder_ids;
@@ -211,10 +219,49 @@ private:
     return state;
   }
 
+  static std::string json_escape(const std::string &value) {
+    std::string escaped;
+    escaped.reserve(value.size() + 4);
+    for (char ch : value) {
+      switch (ch) {
+      case '\\':
+        escaped += "\\\\";
+        break;
+      case '"':
+        escaped += "\\\"";
+        break;
+      case '\b':
+        escaped += "\\b";
+        break;
+      case '\f':
+        escaped += "\\f";
+        break;
+      case '\n':
+        escaped += "\\n";
+        break;
+      case '\r':
+        escaped += "\\r";
+        break;
+      case '\t':
+        escaped += "\\t";
+        break;
+      default:
+        escaped += ch;
+        break;
+      }
+    }
+    return escaped;
+  }
+
+  static std::string two_sided_material_key(const std::string &front,
+                                            const std::string &back) {
+    return "__TWO_SIDED__:[\"" + json_escape(front) + "\",\"" +
+           json_escape(back) + "\"]";
+  }
+
   void reset_run_state() {
     m_buckets.clear();
     m_hidden_buckets.clear();
-    m_texture_scale_cache.clear();
     m_hidden_entity_ids.clear();
     m_layer_override_ids.clear();
     m_hidden_layer_folder_ids.clear();
@@ -223,21 +270,13 @@ private:
     m_partition_output = false;
   }
 
-  void begin_run(const CleanupOptions &options, bool partition_output) {
-    reset_run_state();
-    m_partition_output = partition_output;
+  void ensure_texture_scale_cache() {
+    if (m_texture_scale_cache_ready)
+      return;
 
-    m_hidden_entity_ids.reserve(options.hidden_entity_ids.size());
-    m_hidden_entity_ids.insert(options.hidden_entity_ids.begin(),
-                               options.hidden_entity_ids.end());
-    m_layer_override_ids.reserve(options.layer_override_ids.size());
-    m_layer_override_ids.insert(options.layer_override_ids.begin(),
-                                options.layer_override_ids.end());
-    m_hidden_layer_folder_ids.reserve(options.hidden_layer_folder_ids.size());
-    m_hidden_layer_folder_ids.insert(options.hidden_layer_folder_ids.begin(),
-                                     options.hidden_layer_folder_ids.end());
-
+    ++m_stats.material_scale_cache_builds;
     const std::vector<Material> materials = m_model.materials();
+    m_texture_scale_cache.clear();
     m_texture_scale_cache.reserve(materials.size());
     for (const auto &material : materials) {
       if (!material.is_valid())
@@ -254,6 +293,24 @@ private:
         // particular material cannot expose a usable texture object.
       }
     }
+    m_texture_scale_cache_ready = true;
+  }
+
+  void begin_run(const CleanupOptions &options, bool partition_output) {
+    reset_run_state();
+    m_partition_output = partition_output;
+
+    m_hidden_entity_ids.reserve(options.hidden_entity_ids.size());
+    m_hidden_entity_ids.insert(options.hidden_entity_ids.begin(),
+                               options.hidden_entity_ids.end());
+    m_layer_override_ids.reserve(options.layer_override_ids.size());
+    m_layer_override_ids.insert(options.layer_override_ids.begin(),
+                                options.layer_override_ids.end());
+    m_hidden_layer_folder_ids.reserve(options.hidden_layer_folder_ids.size());
+    m_hidden_layer_folder_ids.insert(options.hidden_layer_folder_ids.begin(),
+                                     options.hidden_layer_folder_ids.end());
+
+    ensure_texture_scale_cache();
   }
 
   EntityLevelPrototype build_level(const Entities &entities) {
@@ -305,6 +362,17 @@ private:
     return level;
   }
 
+  const EntityLevelPrototype &root_level() {
+    if (m_root_cache.has_value()) {
+      ++m_stats.root_cache_hits;
+      return *m_root_cache;
+    }
+
+    ++m_stats.root_cache_misses;
+    m_root_cache.emplace(build_level(m_model.entities()));
+    return *m_root_cache;
+  }
+
   const EntityLevelPrototype &definition_level(std::int32_t definition_id,
                                                 const Entities &entities) {
     auto existing = m_definition_cache.find(definition_id);
@@ -314,7 +382,8 @@ private:
     }
 
     ++m_stats.definition_cache_misses;
-    auto inserted = m_definition_cache.emplace(definition_id, build_level(entities));
+    auto inserted =
+        m_definition_cache.emplace(definition_id, build_level(entities));
     return inserted.first->second;
   }
 
@@ -344,7 +413,8 @@ private:
       SULayerFolderRef folder = SU_INVALID;
       SUResult result = SULayerGetParentLayerFolder(layer.ref(), &folder);
       int guard = 0;
-      while (result == SU_ERROR_NONE && SUIsValid(folder) && guard++ < 128) {
+      while (result == SU_ERROR_NONE && SUIsValid(folder) && guard < 128) {
+        ++guard;
         bool folder_visible = true;
         if (SULayerFolderGetVisibility(folder, &folder_visible) ==
                 SU_ERROR_NONE &&
@@ -368,6 +438,16 @@ private:
         result = SULayerFolderGetParentLayerFolder(folder, &parent);
         folder = parent;
       }
+
+      // Match the legacy reducer's conservative behavior on SDK errors. Also
+      // fail closed if an unexpectedly deep/cyclic folder chain hits the guard.
+      if (visible &&
+          !((result == SU_ERROR_NONE && !SUIsValid(folder)) ||
+            result == SU_ERROR_NO_DATA)) {
+        visible = false;
+      }
+      if (visible && guard >= 128 && SUIsValid(folder))
+        visible = false;
     }
 
     m_layer_visibility_cache.emplace(layer_id, visible);
@@ -426,8 +506,10 @@ private:
       geometry.back_material = material_state(entry.face.back_material());
 
     SUMeshHelperRef mesh_ref = SU_INVALID;
-    if (SUMeshHelperCreate(&mesh_ref, entry.face.ref()) != SU_ERROR_NONE)
-      return nullptr;
+    if (SUMeshHelperCreate(&mesh_ref, entry.face.ref()) != SU_ERROR_NONE) {
+      auto inserted = m_face_cache.emplace(key, std::move(geometry));
+      return &inserted.first->second;
+    }
     ++m_stats.mesh_helper_creates;
 
     std::size_t num_vertices = 0;
@@ -462,7 +544,12 @@ private:
     if (vertices_result != SU_ERROR_NONE || indices_result != SU_ERROR_NONE ||
         vertex_count != num_vertices || index_count < 3) {
       SUMeshHelperRelease(&mesh_ref);
-      return nullptr;
+      geometry.vertices.clear();
+      geometry.normals.clear();
+      geometry.indices.clear();
+      geometry.front_stq.clear();
+      auto inserted = m_face_cache.emplace(key, std::move(geometry));
+      return &inserted.first->second;
     }
 
     if (normals_result != SU_ERROR_NONE || normal_count != num_vertices) {
@@ -496,6 +583,7 @@ private:
       }
     }
 
+    geometry.valid = true;
     SUMeshHelperRelease(&mesh_ref);
     auto inserted = m_face_cache.emplace(key, std::move(geometry));
     return &inserted.first->second;
@@ -626,7 +714,8 @@ private:
 
   static SUPoint2D scaled_uv(const SUPoint3D &stq, double s_scale,
                              double t_scale) {
-    const double q = std::fabs(stq.z) > 1e-20 ? stq.z : 1.0;
+    // Match legacy reducer semantics exactly: only an exact zero q is replaced.
+    const double q = stq.z == 0.0 ? 1.0 : stq.z;
     return {(stq.x / q) * s_scale, (stq.y / q) * t_scale};
   }
 
@@ -646,7 +735,7 @@ private:
 
     const CachedFaceGeometry *geometry =
         load_face_geometry(entry, options.two_sided_materials);
-    if (geometry == nullptr || geometry->vertices.empty() ||
+    if (geometry == nullptr || !geometry->valid || geometry->vertices.empty() ||
         geometry->indices.empty())
       return;
 
@@ -657,13 +746,10 @@ private:
     const MaterialState &effective_back =
         back.valid ? back : inherited_material;
 
-    std::string material_key;
-    if (options.two_sided_materials) {
-      material_key = "__TWO_SIDED__:[\"" + effective_front.name + "\",\"" +
-                     effective_back.name + "\"]";
-    } else {
-      material_key = effective_front.name;
-    }
+    const std::string material_key =
+        options.two_sided_materials
+            ? two_sided_material_key(effective_front.name, effective_back.name)
+            : effective_front.name;
 
     auto &buckets = target_buckets(effective_visible);
     ReducedMesh &mesh = buckets.try_emplace(material_key).first->second;
@@ -771,6 +857,9 @@ private:
           definition_level(entry.definition_id, entry.child_entities);
       process_level(child, child_world, material, options, depth + 1, visible);
     }
+
+    if (level.faces.empty())
+      return;
 
     const double determinant = world.determinant();
     const bool mirrored = determinant < 0.0;
