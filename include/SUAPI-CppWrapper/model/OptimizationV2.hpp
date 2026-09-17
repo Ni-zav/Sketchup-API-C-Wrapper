@@ -92,6 +92,18 @@ public:
     return m_hidden_buckets;
   }
 
+  // Transfer result ownership without deep-copying the potentially huge vertex,
+  // normal, UV and index vectors. The moved-from maps remain valid and are
+  // repopulated by the next begin_run()/traverse call. Source definition and
+  // tessellation caches are deliberately unaffected.
+  std::map<std::string, ReducedMesh> release_reduced_geometry() {
+    return std::move(m_buckets);
+  }
+
+  std::map<std::string, ReducedMesh> release_hidden_reduced_geometry() {
+    return std::move(m_hidden_buckets);
+  }
+
   const ReducerStatsV2 &stats() const { return m_stats; }
 
   // Immutable source caches survive normal traversals so different visibility
