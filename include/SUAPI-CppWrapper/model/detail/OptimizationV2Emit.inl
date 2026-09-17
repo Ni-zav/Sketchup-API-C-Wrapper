@@ -109,11 +109,13 @@ void process_face(const FaceEntry &entry, const Transformation &world,
       front.valid ? front : inherited_material;
   const MaterialState &effective_back =
       back.valid ? back : inherited_material;
+  const MaterialState &effective_single =
+      front.valid ? front : (back.valid ? back : inherited_material);
 
   const std::string material_key =
       options.two_sided_materials
           ? two_sided_material_key(effective_front.name, effective_back.name)
-          : effective_front.name;
+          : effective_single.name;
 
   auto &buckets = target_buckets(effective_visible);
   ReducedMesh &mesh = buckets.try_emplace(material_key).first->second;
@@ -122,7 +124,7 @@ void process_face(const FaceEntry &entry, const Transformation &world,
   double front_s = 1.0;
   double front_t = 1.0;
   if (!front.valid) {
-    const auto scale = texture_scale(effective_front);
+    const auto scale = texture_scale(effective_single);
     front_s = scale.first;
     front_t = scale.second;
   }

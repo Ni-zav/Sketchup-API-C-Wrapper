@@ -91,8 +91,7 @@ const CachedFaceGeometry *load_face_geometry(const FaceEntry &entry,
   ++m_stats.tessellation_cache_misses;
   CachedFaceGeometry geometry;
   geometry.front_material = material_state(entry.face.material());
-  if (two_sided_materials)
-    geometry.back_material = material_state(entry.face.back_material());
+  geometry.back_material = material_state(entry.face.back_material());
 
   SUMeshHelperRef mesh_ref = SU_INVALID;
   if (SUMeshHelperCreate(&mesh_ref, entry.face.ref()) != SU_ERROR_NONE) {
