@@ -157,10 +157,7 @@ const CachedFaceGeometry *load_face_geometry(const FaceEntry &entry,
               SUPoint3D{0.0, 0.0, 1.0});
   }
 
-  const bool needs_back_stq =
-      two_sided_materials ||
-      (!geometry.front_material.valid && geometry.back_material.valid);
-  if (needs_back_stq) {
+  if (two_sided_materials) {
     geometry.back_stq.resize(num_vertices, SUPoint3D{0.0, 0.0, 1.0});
     std::size_t back_stq_count = 0;
     geometry.has_back_stq =
