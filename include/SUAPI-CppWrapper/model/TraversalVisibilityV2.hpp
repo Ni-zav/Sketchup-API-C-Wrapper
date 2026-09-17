@@ -82,7 +82,8 @@ public:
       SULayerFolderRef folder = SU_INVALID;
       SUResult result = SULayerGetParentLayerFolder(layer.ref(), &folder);
       int guard = 0;
-      while (result == SU_ERROR_NONE && SUIsValid(folder) && guard++ < 128) {
+      while (result == SU_ERROR_NONE && SUIsValid(folder) && guard < 128) {
+        ++guard;
         bool folder_visible = true;
         if (SULayerFolderGetVisibility(folder, &folder_visible) == SU_ERROR_NONE &&
             !folder_visible) {
@@ -105,6 +106,17 @@ public:
         result = SULayerFolderGetParentLayerFolder(folder, &parent);
         folder = parent;
       }
+
+      // Preserve the hardened reducer semantics: unexpected SDK errors or an
+      // implausibly deep/cyclic folder chain are treated as hidden rather than
+      // accidentally exposing geometry/wires.
+      if (visible &&
+          !((result == SU_ERROR_NONE && !SUIsValid(folder)) ||
+            result == SU_ERROR_NO_DATA)) {
+        visible = false;
+      }
+      if (visible && guard >= 128 && SUIsValid(folder))
+        visible = false;
     }
 
     m_layer_visibility_cache.emplace(layer_id, visible);
